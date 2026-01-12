@@ -1,0 +1,2241 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>訪廠問題表格｜填寫＋PPT 匯出</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;600;700&display=swap');
+    :root { --font: 'Noto Sans TC','Microsoft JhengHei',system-ui,-apple-system,Segoe UI,Arial,sans-serif; }
+    body { font-family: var(--font); }
+
+    /* 單張圖片：不縮放顯示（可捲動） */
+    .one-image-wrap { overflow: auto; }
+    .one-image-wrap img { max-width: none; height: auto; }
+
+    /* Tabs scroll (mobile-friendly) */
+    .tabs-scroll { -webkit-overflow-scrolling: touch; }
+
+    /* Handwriting canvas: avoid browser touch gestures while drawing */
+    canvas.notesCanvas { touch-action: none; }
+  
+    /* Notes tool button active state */
+    .notesEraserBtn.is-eraser {
+      background: #0f172a; /* slate-900 */
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .notesCanvasBox { box-sizing: border-box; }
+
+    /* Notes tool button (pen/eraser) active state */
+    .notesToolBtn.is-active {
+      background: #0f172a; /* slate-900 */
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+
+/* Tablet-friendly resize handle (acts like textarea corner) */
+.notesResizeHandle{
+  position:absolute;
+  right:6px;
+  bottom:6px;
+  width:18px;
+  height:18px;
+  cursor: ns-resize;
+  border-radius:6px;
+  background:
+    linear-gradient(135deg, transparent 0 50%, rgba(148,163,184,.55) 50% 52%, transparent 52% 60%, rgba(148,163,184,.55) 60% 62%, transparent 62% 70%, rgba(148,163,184,.55) 70% 72%, transparent 72% 100%);
+}
+</style>
+
+  <script>
+    // --- Robust loader for PptxGenJS (fix "download button does nothing" when CDN is blocked) ---
+    async function loadScriptOnce(src) {
+      return new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[data-src="' + src + '"]');
+        if (existing) { resolve(); return; }
+
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.setAttribute('data-src', src);
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Failed to load: ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensurePptxGenLoaded() {
+      // Already loaded
+      if (window.PptxGenJS) return true;
+
+      const candidates = [
+        // Primary (jsDelivr GitHub)
+        'https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.bundle.js',
+        // Fallback (unpkg)
+        'https://unpkg.com/pptxgenjs@3.12.0/dist/pptxgen.bundle.js',
+        // Local fallback (place pptxgen.bundle.js next to this HTML if you want offline mode)
+        './pptxgen.bundle.js'
+      ];
+
+      for (const url of candidates) {
+        try {
+          await loadScriptOnce(url);
+          if (window.PptxGenJS) return true;
+        } catch (e) {
+          // continue
+          console.warn(e);
+        }
+      }
+      return false;
+    }
+  </script>
+
+  <script>
+    // --- PDF.js loader (for extracting product name from 排關圖 PDF) ---
+    async function ensurePdfJsLoaded() {
+      if (window.pdfjsLib) return true;
+
+      const candidates = [
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js',
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js',
+        './pdf.min.js'
+      ];
+
+      for (const url of candidates) {
+        try {
+          await loadScriptOnce(url);
+          if (window.pdfjsLib) {
+            // Worker (best effort)
+            try {
+              window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js';
+            } catch (e) {}
+            return true;
+          }
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+      return false;
+    }
+  </script>
+
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+  <!-- Floating catalog button (left-top, slightly lower to avoid covering title) -->
+  <button id="catalogBtn"
+          class="fixed z-40 rounded-xl border bg-white/90 backdrop-blur px-3 py-2 text-sm font-semibold shadow hover:bg-slate-50" style="left: 0; top: 0;">
+    商品目錄
+  </button>
+
+  <header class="sticky top-0 z-30 border-b bg-white/80 backdrop-blur">
+    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between gap-3">
+      <div class="min-w-0 flex items-center gap-2">
+        <h1 class="text-lg font-bold truncate">訪廠問題表格</h1>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 justify-end">
+        <button id="importPdfBtnHeader" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">匯入排關圖</button>
+        <button id="driveImportBtn" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">從雲端匯入</button>
+        <button id="exportBtn"
+                class="rounded-xl bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-400">
+          下載 PPT
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Tabs bar -->
+  <div id="tabsBar" class="sticky top-[57px] z-20 border-b bg-white">
+    <div class="mx-auto max-w-6xl px-4 py-2">
+      <div class="flex items-center gap-2">
+        <div id="tabs" class="tabs-scroll flex-1 overflow-auto whitespace-nowrap"></div>
+        <div class="shrink-0 hidden sm:flex items-center gap-2">
+          <!-- 新增表單：放在「複製目前」左邊 -->
+<button id="addRowBtn"
+                  class="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">
+            新增表單
+          </button>
+          <button id="dupActiveBtn" class="rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">複製目前</button>
+          <button id="delActiveBtn"
+                  class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100">
+            刪除目前
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main class="mx-auto max-w-6xl px-4 py-6">
+    <section aria-label="records">
+      <div id="panels"></div>
+    </section>
+  </main>
+
+  <!-- Catalog modal -->
+  <div id="catalogModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/40" data-close="true"></div>
+    <div class="absolute bottom-0 left-0 right-0 sm:inset-0 sm:flex sm:items-center sm:justify-center">
+      <div class="w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl bg-white shadow-xl">
+        <div class="flex items-center justify-between px-4 py-3 border-b">
+          <div>
+            <div class="text-sm font-semibold">商品目錄</div>
+            <div class="text-xs text-slate-500">點選可跳轉到對應表單</div>
+          </div>
+          <button id="closeCatalogBtn" class="rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">關閉</button>
+        </div>
+        <div id="catalogList" class="max-h-[70vh] overflow-auto p-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <template id="panelTpl">
+    <article class="rounded-2xl border bg-white p-4 shadow-sm">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold text-slate-700">
+            <span class="panelTitle">表單</span>
+          </h2>
+        </div>
+        <!-- Mobile actions (same position on every form) -->
+        <div class="flex shrink-0 items-center gap-2 sm:hidden">
+          <button class="addBtn rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">新增</button>
+          <button class="dupBtn rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">複製</button>
+          <button class="delBtn rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100">刪除</button>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-12">
+        <label class="md:col-span-4">
+          <span class="text-xs font-semibold text-slate-600">類型</span>
+          <select class="typeInput mt-1 w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring">
+            <option value="">請選擇</option>
+            <option value="生產面">生產面</option>
+            <option value="衛生面">衛生面</option>
+          </select>
+        </label>
+
+        <label class="md:col-span-8">
+          <span class="text-xs font-semibold text-slate-600">商品名</span>
+          <div class="mt-1 flex items-center gap-2">
+            <div class="relative flex-1">
+              <input class="nameInput w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring" placeholder="" autocomplete="off" />
+              <div class="suggestBox hidden absolute left-0 right-0 mt-1 rounded-xl border bg-white shadow-lg overflow-hidden z-20"></div>
+            </div>
+            <button type="button" class="showPdfBtn shrink-0 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">
+              顯示排關圖
+            </button>
+          </div>
+        </label>
+
+        <label class="md:col-span-12">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-semibold text-slate-600">內容記錄</span>
+            <div class="flex items-center gap-2">
+              <button type="button" class="notesPenBtn notesToolBtn rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">畫筆</button>
+              <button type="button" class="notesEraserBtn notesToolBtn rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">橡皮擦</button>
+              <button type="button" class="notesClearBtn rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">清除手寫</button>
+            </div>
+          </div>
+
+          <!-- 內容記錄：平板橫向優先（左右雙欄），手機/窄螢幕自動改為上下堆疊 -->
+          <div class="mt-1 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <!-- 左：可打字 -->
+            <div class="min-w-0">
+              <div class="mb-1 text-xs font-semibold text-slate-500">內容記錄（打字）</div>
+              <textarea class="notesTextInput w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+                style="height: 380px; resize: vertical;"
+                placeholder="可直接打字記錄（例如：現況、觀察重點、原因假設、與廠方確認內容等）"></textarea>
+            </div>
+
+            <!-- 右：可手寫（觸控筆/手指） -->
+            <div class="min-w-0">
+              <div class="mb-1 text-xs font-semibold text-slate-500">內容記錄（手寫）</div>
+              <div class="rounded-xl border bg-white overflow-hidden">
+                <div class="notesCanvasBox w-full rounded-xl border border-slate-200 bg-white overflow-hidden relative" style="height: 380px; min-height: 260px;">
+                  <canvas class="notesCanvas block w-full h-full" style="touch-action: none;"></canvas>
+                  <!-- Custom resize handle (tablet-friendly, avoids conflict with drawing) -->
+                  <div class="notesResizeHandle" title="拖曳調整手寫區高度"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p class="mt-1 text-xs text-slate-500">此區同時支援打字與觸控筆／手指手寫；平板橫向時將自動左右分欄，建議使用觸控筆以提升精準度。</p>
+        </label>
+
+        <label class="md:col-span-12">
+          <span class="text-xs font-semibold text-slate-600">問題說明</span>
+          <textarea class="descInput mt-1 w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring" rows="6" placeholder=""></textarea>
+        </label>
+      </div>
+
+      <div class="mt-4 rounded-2xl border bg-slate-50 p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-semibold">圖片上傳（支援手機、多張）</p>
+            <p class="text-xs text-slate-600">一次可選多張；PPT 每頁最多放 2 張，超過會自動續頁。</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 cursor-pointer">
+              選擇圖片
+              <input class="imgInput hidden" type="file" accept="image/*" multiple />
+            </label>
+            <button class="clearImgsBtn rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-white">清除圖片</button>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="imgHint text-xs text-slate-500">尚未選擇圖片。</div>
+          <div class="imgPreview mt-3"></div>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <input id="pdfInput" type="file" accept="application/pdf" multiple class="hidden" />
+
+
+  <script>
+    const $ = (sel, root) => (root || document).querySelector(sel);
+    const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+    const tabsEl = $('#tabs');
+    const panelsEl = $('#panels');
+    const panelTpl = $('#panelTpl');
+
+    const state = { records: [], active: 0 };
+
+
+    // ---------------- 排關圖（PDF）管理 ----------------
+    const pdfStore = new Map(); // key: normalized product name -> { displayName, fileName, blobUrl }
+
+    function normalizeKey(s) {
+      const t = (s || '').toString().trim();
+      return t
+        .replace(/\s+/g, '')
+        .replace(/[()（）【】\[\]{}「」『』"“”'’`·•‧,，.。:：;；!！?？\/\\|｜\-—_]/g, '')
+        .toLowerCase();
+    }
+
+
+    // ---------------- 內容記錄：手寫畫布（支援觸控筆） ----------------
+    function getCanvasCssSize(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width));
+      const h = Math.max(1, Math.round(rect.height));
+      return { w, h };
+    }
+
+    function prepareCanvasContext(canvas) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      // Default pen style
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#111111';
+      ctx.lineWidth = 2.2;
+      return ctx;
+    }
+
+    function resizeCanvas(canvas, preservedDataUrl) {
+      const dpr = window.devicePixelRatio || 1;
+      const { w: cssW, h: cssH } = getCanvasCssSize(canvas);
+      const pxW = Math.round(cssW * dpr);
+      const pxH = Math.round(cssH * dpr);
+
+      if (canvas.width === pxW && canvas.height === pxH) return;
+
+      canvas.width = pxW;
+      canvas.height = pxH;
+
+      const ctx = prepareCanvasContext(canvas);
+      // Map drawing coordinates to CSS pixels
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // White background (so exported PNG won't be transparent)
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      if (preservedDataUrl) {
+        restoreCanvasFromDataUrl(canvas, preservedDataUrl);
+      }
+    }
+
+    function restoreCanvasFromDataUrl(canvas, dataUrl) {
+      if (!dataUrl) return;
+      const ctx = prepareCanvasContext(canvas);
+      const dpr = window.devicePixelRatio || 1;
+      const { w: cssW, h: cssH } = getCanvasCssSize(canvas);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const img = new Image();
+      img.onload = () => {
+        // Ensure background is white
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, cssW, cssH);
+        ctx.drawImage(img, 0, 0, cssW, cssH);
+      };
+      img.src = dataUrl;
+    }
+
+    function clearNotesCanvas(canvas, opts = {}) {
+      const dpr = window.devicePixelRatio || 1;
+      const { w: cssW, h: cssH } = getCanvasCssSize(canvas);
+      const ctx = prepareCanvasContext(canvas);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, cssW, cssH);
+
+      if (opts && opts.save && typeof opts.idx === 'number') {
+        state.records[opts.idx].notesInk = canvas.toDataURL('image/png');
+      }
+    }
+
+
+    // Registry: avoid leaking multiple window resize listeners after re-render
+    const _notesCanvasRegistry = new Set();
+    let _notesResizeHooked = false;
+
+    function _ensureNotesResizeHook() {
+      if (_notesResizeHooked) return;
+      _notesResizeHooked = true;
+
+      let t = null;
+      window.addEventListener('resize', () => {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => {
+          for (const cv of Array.from(_notesCanvasRegistry)) {
+            // Remove stale nodes
+            if (!document.body.contains(cv)) {
+              _notesCanvasRegistry.delete(cv);
+              continue;
+            }
+            const i = Number(cv.dataset.notesIdx || '');
+            const keep = (state.records[i] && state.records[i].notesInk) ? state.records[i].notesInk : '';
+            resizeCanvas(cv, keep);
+          }
+        }, 120);
+      });
+    }
+
+    function initNotesCanvas(canvas, idx) {
+      // Prevent duplicate binding (in case of accidental re-init)
+      if (canvas.dataset.inkBound === '1') return;
+      canvas.dataset.inkBound = '1';
+
+      // Ensure correct bitmap size
+      const preserved = state.records[idx] && state.records[idx].notesInk ? state.records[idx].notesInk : '';
+      requestAnimationFrame(() => resizeCanvas(canvas, preserved));
+
+      // Keep canvas crisp on resize (single global listener)
+      canvas.dataset.notesIdx = String(idx);
+      _notesCanvasRegistry.add(canvas);
+      _ensureNotesResizeHook();
+
+      // Observe element resize (e.g., user drags the resizer on the canvas box)
+      const boxEl = canvas.closest('.notesCanvasBox') || canvas.parentElement;
+
+      // Custom resize handle (drag to change height) — avoids conflict with drawing on the canvas
+      if (boxEl && !boxEl._notesResizeHandleBound) {
+        const handle = boxEl.querySelector('.notesResizeHandle');
+        if (handle) {
+          let startY = 0;
+          let startH = 0;
+          const onMove = (e) => {
+            const dy = (e.clientY - startY);
+            let next = startH + dy;
+            const minH = 260;
+            const maxH = Math.round(window.innerHeight * 0.8);
+            if (next < minH) next = minH;
+            if (next > maxH) next = maxH;
+            boxEl.style.height = next + 'px';
+          };
+          const onUp = () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+          };
+          handle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            startY = e.clientY;
+            startH = Math.round(boxEl.getBoundingClientRect().height || 0);
+            try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onUp);
+          });
+        }
+        boxEl._notesResizeHandleBound = true;
+      }
+
+      if (boxEl && typeof ResizeObserver !== 'undefined' && !canvas._notesResizeObserver) {
+        let roT = null;
+        const ro = new ResizeObserver(() => {
+          if (canvas._isDrawing) return; // do not resize/repaint while user is drawing (prevents tool glitches)
+          if (roT) clearTimeout(roT);
+          roT = setTimeout(() => {
+            // Preserve current ink (even if user hasn't lifted pen yet)
+            let inkNow = '';
+            try { inkNow = canvas.toDataURL('image/png'); } catch (err) {}
+            const i = Number(canvas.dataset.notesIdx || idx);
+            resizeCanvas(canvas, inkNow || ((state.records[i] && state.records[i].notesInk) ? state.records[i].notesInk : ''));
+            // Save box height so it persists per item
+            try {
+              const h = Math.round((boxEl.getBoundingClientRect().height || 0));
+              if (h > 0 && state.records[i]) state.records[i].notesBoxH = h;
+            } catch (err) {}
+            // Save ink after resize
+            try {
+              if (state.records[i]) state.records[i].notesInk = canvas.toDataURL('image/png');
+            } catch (err) {}
+          }, 120);
+        });
+        ro.observe(boxEl);
+        canvas._notesResizeObserver = ro;
+      }
+const ctx = prepareCanvasContext(canvas);
+
+      let drawing = false;
+      canvas._isDrawing = false;
+      let lastX = 0;
+      let lastY = 0;
+      let activePointerId = null;
+
+      const getPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      };
+
+      canvas.addEventListener('pointerdown', (e) => {
+        // Mouse: only left button; Pen/Touch: allow
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+        e.preventDefault();
+        drawing = true;
+        canvas._isDrawing = true;
+        activePointerId = e.pointerId;
+        try { canvas.setPointerCapture(activePointerId); } catch (err) {}
+
+        // Tool mode: pen / eraser
+        // - pen: normal ink
+        // - eraser: removes ink (destination-out) so it works regardless of background color
+        const tool = (canvas.dataset.notesTool || ((state.records[idx] && state.records[idx].notesTool) ? state.records[idx].notesTool : 'pen'));
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        if (tool === 'eraser') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.lineWidth = 22;
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = '#111111';
+          ctx.lineWidth = 2.2;
+        }
+// Make sure we are using current DPR transform
+        const dpr = window.devicePixelRatio || 1;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const p = getPos(e);
+        lastX = p.x;
+        lastY = p.y;
+
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+      });
+
+      canvas.addEventListener('pointermove', (e) => {
+        if (!drawing) return;
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+
+        e.preventDefault();
+        const p = getPos(e);
+
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+
+        // Start new segment to reduce long path memory
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+
+        lastX = p.x;
+        lastY = p.y;
+      });
+
+      const end = (e) => {
+        if (!drawing) return;
+        if (activePointerId !== null && e.pointerId !== activePointerId) return;
+
+        drawing = false;
+        canvas._isDrawing = false;
+        try { canvas.releasePointerCapture(activePointerId); } catch (err) {}
+        activePointerId = null;
+
+        // Persist to record only once per stroke
+        if (state.records[idx]) {
+          state.records[idx].notesInk = canvas.toDataURL('image/png');
+        }
+      };
+
+      canvas.addEventListener('pointerup', end);
+      canvas.addEventListener('pointercancel', end);
+      canvas.addEventListener('pointerleave', (e) => {
+        // Do not end drawing on leave if pointer is captured
+      });
+    }
+
+    function guessNameFromFilename(fileName) {
+      const base = (fileName || '').replace(/\.pdf$/i, '');
+      // 例： "1.義式番茄起司義大利麵" -> "義式番茄起司義大利麵"
+      return base.replace(/^\s*\d+\s*[\.\-、_ ]\s*/,'').trim() || base.trim();
+    }
+
+    async function extractProductNameFromPdf(arrayBuffer) {
+      const ok = await ensurePdfJsLoaded();
+      if (!ok || !window.pdfjsLib) return '';
+
+      try {
+        const doc = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const page = await doc.getPage(1);
+        const tc = await page.getTextContent();
+        const text = tc.items.map(it => (it && it.str) ? it.str : '').join(' ');
+        // 常見格式： "商品名稱 義式番茄起司義大利麵"
+        let m = text.match(/商品名稱\s*([^\s].*?)(?:\s{2,}|生產列數|半成品設備|包裝設備|作成日|產線時間|$)/);
+        if (m && m[1]) return m[1].trim();
+
+        const idx = text.indexOf('商品名稱');
+        if (idx >= 0) {
+          const tail = text.slice(idx + 4, idx + 60);
+          return tail.trim();
+        }
+        return '';
+      } catch (e) {
+        console.warn('extractProductNameFromPdf failed', e);
+        return '';
+      }
+    }
+
+    function pdfListText() {
+      const names = Array.from(pdfStore.values()).map(v => v.displayName).filter(Boolean);
+      return names.length ? names.join('、') : '（無）';
+    }
+
+    async function importPdfFiles(files) {
+      if (!files || !files.length) return;
+
+      let imported = 0;
+
+      for (const f of files) {
+        try {
+          const ab = await f.arrayBuffer();
+          const extracted = await extractProductNameFromPdf(ab);
+          const displayName = extracted || guessNameFromFilename(f.name);
+          const key = normalizeKey(displayName);
+          const blobUrl = URL.createObjectURL(new Blob([ab], { type: 'application/pdf' }));
+
+          const prev = pdfStore.get(key);
+          if (prev && prev.blobUrl) {
+            try { URL.revokeObjectURL(prev.blobUrl); } catch (e) {}
+          }
+
+          pdfStore.set(key, { displayName, fileName: f.name, blobUrl, ab });
+          imported += 1;
+        } catch (e) {
+          console.warn('import pdf failed:', f && f.name, e);
+        }
+      }
+
+      alert(`已匯入排關圖：${imported} 份`);
+    }
+
+    function findPdfForProductName(productName) {
+      const key = normalizeKey(productName);
+      if (!key) return null;
+
+      if (pdfStore.has(key)) return pdfStore.get(key);
+
+      for (const [k, v] of pdfStore.entries()) {
+        if (k && key && (k.includes(key) || key.includes(k))) return v;
+      }
+      return null;
+    }
+
+    
+    // Suggestions: list imported PDF product names and provide substring matching
+    function allImportedProductNames() {
+      const out = [];
+      const seen = new Set();
+      for (const v of pdfStore.values()) {
+        const name = (v && v.displayName) ? String(v.displayName).trim() : '';
+        if (!name) continue;
+        if (seen.has(name)) continue;
+        seen.add(name);
+        out.push(name);
+      }
+      return out;
+    }
+
+    function suggestProductNames(query, limit = 8) {
+      const q = (query || '').toString().trim();
+      if (!q) return [];
+      const names = allImportedProductNames();
+
+      // Substring match (case-insensitive for Latin, neutral for CJK)
+      const qLower = q.toLowerCase();
+      const hits = names.filter(n => n.toLowerCase().includes(qLower));
+
+      // Prefer prefix hits first, then other substring hits
+      hits.sort((a, b) => {
+        const ap = a.toLowerCase().startsWith(qLower) ? 0 : 1;
+        const bp = b.toLowerCase().startsWith(qLower) ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        return a.length - b.length;
+      });
+
+      return hits.slice(0, limit);
+    }
+
+    function renderSuggestBox(boxEl, items, onPick) {
+      if (!boxEl) return;
+      boxEl.innerHTML = '';
+
+      if (!items || items.length === 0) {
+        boxEl.classList.add('hidden');
+        return;
+      }
+
+      items.forEach((name) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'w-full text-left px-3 py-2 text-sm hover:bg-slate-50';
+        btn.textContent = name;
+
+        // Use mousedown to avoid blur closing before click
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          onPick && onPick(name);
+        });
+
+        boxEl.appendChild(btn);
+      });
+
+      boxEl.classList.remove('hidden');
+    }
+
+    function hideSuggestBox(boxEl) {
+      if (!boxEl) return;
+      boxEl.classList.add('hidden');
+    }
+
+    
+    async function renderPdfInto(containerEl, arrayBuffer) {
+      if (!containerEl) return;
+      containerEl.innerHTML = '';
+
+      if (!(window.pdfjsLib && pdfjsLib.getDocument)) {
+        throw new Error('pdfjsLib not available');
+      }
+
+      const loading = document.createElement('div');
+      loading.className = 'p-4 text-sm text-slate-600';
+      loading.textContent = '載入排關圖中…';
+      containerEl.appendChild(loading);
+
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      // Clear loading
+      containerEl.innerHTML = '';
+
+      // Fit-to-width scale based on container
+      const padding = 24; // internal padding estimate
+      const targetW = Math.max(320, containerEl.clientWidth - padding);
+
+      for (let p = 1; p <= doc.numPages; p++) {
+        // eslint-disable-next-line no-await-in-loop
+        const page = await doc.getPage(p);
+
+        const viewport1 = page.getViewport({ scale: 1 });
+        const scale = Math.min(2.2, Math.max(0.6, targetW / viewport1.width));
+        const viewport = page.getViewport({ scale });
+
+        const wrap = document.createElement('div');
+        wrap.className = 'p-3 border-b bg-white';
+        const label = document.createElement('div');
+        label.className = 'mb-2 text-xs text-slate-500';
+        label.textContent = `第 ${p} / ${doc.numPages} 頁`;
+        wrap.appendChild(label);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.className = 'w-full rounded-lg border';
+
+        const ctx = canvas.getContext('2d');
+        // eslint-disable-next-line no-await-in-loop
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        wrap.appendChild(canvas);
+        containerEl.appendChild(wrap);
+      }
+    }
+
+    function openPdfModal(productName, pdfItem) {
+      const modal = document.getElementById('pdfModal');
+      const renderEl = document.getElementById('pdfRender');
+      const frame = document.getElementById('pdfFrame');
+      const empty = document.getElementById('pdfEmpty');
+      const title = document.getElementById('pdfTitle');
+      const list = document.getElementById('pdfListText');
+      const openBtn = document.getElementById('pdfOpenBtn');
+
+      title.textContent = productName ? `商品名：${productName}` : '—';
+      list.textContent = pdfListText();
+
+      // reset
+      if (openBtn) {
+        openBtn.classList.add('hidden');
+        openBtn.removeAttribute('href');
+      }
+      if (renderEl) {
+        renderEl.classList.add('hidden');
+        renderEl.innerHTML = '';
+      }
+      if (frame) {
+        frame.classList.add('hidden');
+        frame.src = 'about:blank';
+      }
+
+      if (pdfItem && pdfItem.blobUrl) {
+        if (openBtn) {
+          openBtn.href = pdfItem.blobUrl;
+          openBtn.classList.remove('hidden');
+        }
+      }
+
+      if (pdfItem && (pdfItem.ab || pdfItem.blobUrl)) {
+        empty.classList.add('hidden');
+
+        // Prefer PDF.js rendering (avoid Chrome blocking iframe navigation in some environments)
+        (async () => {
+          if (pdfItem && pdfItem.ab && renderEl) {
+            try {
+              renderEl.classList.remove('hidden');
+              await renderPdfInto(renderEl, pdfItem.ab);
+              return;
+            } catch (err) {
+              console.warn('PDF render fallback to iframe:', err);
+              // fall back to iframe
+            }
+          }
+
+          if (pdfItem && pdfItem.blobUrl && frame) {
+            frame.classList.remove('hidden');
+            frame.src = pdfItem.blobUrl;
+          } else {
+            empty.classList.remove('hidden');
+          }
+        })();
+      } else {
+        empty.classList.remove('hidden');
+      }
+
+      modal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+    }
+
+
+
+    function closePdfModal() {
+      const modal = document.getElementById('pdfModal');
+      const frame = document.getElementById('pdfFrame');
+      const renderEl = document.getElementById('pdfRender');
+      modal.classList.add('hidden');
+      try { frame.src = 'about:blank'; } catch (e) {}
+      try {
+        if (renderEl) {
+          renderEl.innerHTML = '';
+          renderEl.classList.add('hidden');
+        }
+      } catch (e) {}
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    // ---------------- Google Drive（特定資料夾）匯入：Apps Script Web App 方案 ----------------
+    // 固定資料夾 ID（由你提供）
+    const DRIVE_FOLDER_ID = '1aHrHqApa_PwLQWW5DzhDC5oRts1BKi4G';
+
+    // 小組用存取 token（請自行改成較長字串，並僅分享給同部門成員）
+    // 若你們部署 Web App 設為「同機構使用者」，也可不填 token（但仍建議保留）
+    const DRIVE_EXEC_URL = 'https://script.google.com/macros/s/AKfycbwsQ43Soa902UOUwIEPeblCLZtgbIkInsau6C2sXmYo0hkZDXqQQr6yXMuZTFVWXbUd/exec';
+    // 若你更新了 Apps Script 部署網址，請把上面這行改成新的 /exec 連結即可。
+
+    
+
+
+    function openDriveModal() {
+      $('#driveFolderIdText').textContent = DRIVE_FOLDER_ID;
+      $('#driveCountText').textContent = '0';
+      $('#driveSearch').value = '';
+      $('#driveList').innerHTML = '';
+      $('#driveModal').classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+      loadDriveList();
+    }
+
+    function closeDriveModal() {
+      $('#driveModal').classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    function formatBytes(n) {
+      const num = Number(n || 0);
+      if (!num) return '—';
+      const units = ['B','KB','MB','GB'];
+      let i = 0, v = num;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '—';
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString();
+      } catch (e) {
+        return iso;
+      }
+    }
+
+    let driveCache = []; // [{id,name,sizeBytes,updatedAt,productName}]
+    let driveSelectedIds = new Set();
+
+    function escapeHtml(s) {
+      return String(s || '')
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#39;");
+    }
+
+    
+    function getVisibleDriveCheckboxes() {
+      // Only currently rendered/visible items
+      return Array.from(document.querySelectorAll('.driveChk'));
+    }
+
+    function setAllVisibleDriveChecks(checked) {
+      const boxes = getVisibleDriveCheckboxes();
+      boxes.forEach(b => {
+        b.checked = !!checked;
+        const id = b.getAttribute('data-id');
+        if (!id) return;
+        if (b.checked) driveSelectedIds.add(id);
+        else driveSelectedIds.delete(id);
+      });
+      syncDriveSelectAllState();
+    }
+
+    function syncDriveSelectAllState() {
+      const selectAll = document.getElementById('driveSelectAll');
+      if (!selectAll) return;
+      const boxes = getVisibleDriveCheckboxes();
+      if (boxes.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        return;
+      }
+      const checkedCount = boxes.filter(b => b.checked).length;
+      selectAll.checked = checkedCount === boxes.length;
+      selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+    }
+
+function renderDriveList(items) {
+      const list = $('#driveList');
+      list.innerHTML = '';
+      const q = ($('#driveSearch').value || '').trim().toLowerCase();
+
+      const filtered = (items || []).filter(it => {
+        if (!q) return true;
+        return (it.name || '').toLowerCase().includes(q) || (it.productName || '').toLowerCase().includes(q);
+      });
+
+      $('#driveCountText').textContent = String(filtered.length);
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'p-4 text-sm text-slate-600';
+        empty.textContent = '此資料夾目前沒有可用的 PDF（或搜尋條件無結果）。';
+        list.appendChild(empty);
+        return;
+      }
+
+      filtered.forEach((it) => {
+        const row = document.createElement('label');
+        row.className = 'grid grid-cols-12 items-center gap-2 px-3 py-2 border-t hover:bg-slate-50 cursor-pointer';
+        row.innerHTML = `
+          <div class="col-span-1"><input type="checkbox" class="driveChk rounded" data-id="${it.id}"></div>
+          <div class="col-span-7">
+            <div class="text-sm font-semibold text-slate-800 break-words">${escapeHtml(it.productName || it.name)}</div>
+            <div class="text-xs text-slate-500 break-words">${escapeHtml(it.name || '')}</div>
+          </div>
+          <div class="col-span-2 text-xs text-slate-600">${escapeHtml(formatBytes(it.sizeBytes))}</div>
+          <div class="col-span-2 text-xs text-slate-600">${escapeHtml(formatDate(it.updatedAt))}</div>
+        `;
+        // Apply persisted selection state
+        const chk = row.querySelector('.driveChk');
+        if (chk) {
+          chk.checked = driveSelectedIds.has(it.id);
+          if (!chk.__bound) {
+            chk.addEventListener('change', () => {
+              if (chk.checked) driveSelectedIds.add(it.id);
+              else driveSelectedIds.delete(it.id);
+              syncDriveSelectAllState();
+            });
+            chk.__bound = true;
+          }
+        }
+
+        list.appendChild(row);
+      });
+    }
+
+    // ---------------------------
+// JSONP helper (for GitHub Pages / static hosting)
+// ---------------------------
+function jsonpRequest(url, timeoutMs) {
+  timeoutMs = timeoutMs || 20000;
+  return new Promise(function(resolve, reject) {
+    var cbName = '__jsonp_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    var script = document.createElement('script');
+    var done = false;
+
+    function cleanup() {
+      try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    var timer = setTimeout(function() {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error('timeout'));
+    }, timeoutMs);
+
+    window[cbName] = function(data) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      resolve(data);
+    };
+
+    script.onerror = function() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('load error'));
+    };
+
+    var sep = (url.indexOf('?') >= 0) ? '&' : '?';
+    script.src = url + sep + 'callback=' + encodeURIComponent(cbName);
+    document.body.appendChild(script);
+  });
+}
+
+function buildDrivePreviewUrl(fileId) {
+  return 'https://drive.google.com/file/d/' + encodeURIComponent(fileId) + '/preview';
+}
+function buildDriveOpenUrl(fileId) {
+  return 'https://drive.google.com/file/d/' + encodeURIComponent(fileId) + '/view';
+}
+
+    async function loadDriveList() {
+  $('#driveHint').textContent = '正在從雲端載入排關圖清單…';
+  $('#driveHint').classList.remove('hidden');
+
+  try {
+    var baseUrl = DRIVE_EXEC_URL;
+    if (!baseUrl || baseUrl.indexOf('script.google.com/macros/s/') === -1) {
+      throw new Error('未設定正確的 Apps Script /exec 網址');
+    }
+    // 使用 JSONP 避開 GitHub Pages 的 CORS 限制
+    var url = baseUrl + (baseUrl.indexOf('?') >= 0 ? '&' : '?') + 'action=list';
+    var res = await jsonpRequest(url, 20000);
+
+    if (!res || !res.ok) {
+      throw new Error((res && res.message) ? res.message : '雲端清單載入失敗');
+    }
+
+    driveCache = (res.items || []).map(function(it) {
+      var pname = guessNameFromFilename(it.name || '');
+      return {
+        id: it.id,
+        name: it.name,
+        sizeBytes: it.sizeBytes || 0,
+        updatedAt: it.updatedAt || '',
+        productName: pname,
+        previewUrl: buildDrivePreviewUrl(it.id),
+        openUrl: buildDriveOpenUrl(it.id)
+      };
+    });
+
+    driveCacheLoaded = true;
+    $('#driveHint').classList.add('hidden');
+    renderDriveList(driveCache);
+    syncDriveSelectAllState();
+  } catch (err) {
+    $('#driveHint').textContent = '雲端清單載入失敗：' + (err && err.message ? err.message : String(err));
+    $('#driveHint').classList.remove('hidden');
+    // 保持清單區域可見（避免 UI 看起來整片空白）
+    renderDriveList([]);
+    syncDriveSelectAllState();
+  }
+}
+
+    function base64ToUint8Array(base64) {
+      const raw = atob((base64 || '').replace(/\s+/g,''));
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+
+    let __driveImporting = false;
+
+async function importSelectedFromDrive() {
+  if (__driveImporting) return;
+  __driveImporting = true;
+
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.driveChk:checked'));
+  if (!checks.length) {
+    alert('請先勾選至少一個檔案。');
+    __driveImporting = false;
+    return;
+  }
+
+  var imported = 0;
+  checks.forEach(function(chk) {
+    var id = chk.getAttribute('data-id');
+    var item = null;
+    for (var i = 0; i < driveCache.length; i++) {
+      if (driveCache[i].id === id) { item = driveCache[i]; break; }
+    }
+    if (!item) return;
+
+    var productName = item.productName || guessNameFromFilename(item.name || '');
+    var key = normalizeKey(productName);
+
+    // 直接以 Drive Preview 連結作為預覽來源（不下載 PDF 到本機）
+    pdfStore.set(key, {
+      displayName: productName,
+      fileName: item.name || (productName + '.pdf'),
+      blobUrl: item.previewUrl,
+      openUrl: item.openUrl,
+      source: 'drive'
+    });
+    imported++;
+  });
+
+  closeDriveModal();
+  __driveImporting = false;
+  alert('已成功匯入排關圖');
+}
+
+
+    function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+    function todayISO() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    function makeEmptyRecord() { return { type: '', name: '', notesText: '', notesInk: '', notesTool: 'pen', desc: '', images: [] }; }
+
+    function displayName(rec, idx) {
+      const name = rec && typeof rec.name === 'string' ? rec.name : '';
+      const n = name.trim();
+      return n ? n : `未命名 ${idx + 1}`;
+    }
+
+    function chunk(arr, size) {
+      const out = [];
+      for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+      return out;
+    }
+
+    function fileToDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function getImageSize(dataUrl) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.src = dataUrl;
+      });
+    }
+
+    function renderImagePreview(container, images) {
+      container.innerHTML = '';
+      if (!images || images.length === 0) return;
+
+      if (images.length === 1) {
+        const wrap = document.createElement('div');
+        wrap.className = 'one-image-wrap rounded-xl border bg-white p-2';
+        const img = document.createElement('img');
+        img.src = images[0].dataUrl;
+        img.alt = images[0].name || 'image';
+        wrap.appendChild(img);
+        container.appendChild(wrap);
+        return;
+      }
+
+      const grid = document.createElement('div');
+      grid.className = 'grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4';
+      images.forEach((it) => {
+        const card = document.createElement('div');
+        card.className = 'rounded-xl border bg-white p-2';
+
+        const img = document.createElement('img');
+        img.src = it.dataUrl;
+        img.alt = it.name || 'image';
+        img.className = 'h-32 w-full rounded-lg object-cover';
+
+        const meta = document.createElement('div');
+        meta.className = 'mt-2 text-[11px] text-slate-500 break-all';
+        meta.textContent = it.name || '';
+
+        card.appendChild(img);
+        card.appendChild(meta);
+        grid.appendChild(card);
+      });
+      container.appendChild(grid);
+    }
+
+    function setActive(index, opts) {
+      const options = opts || { scrollTabIntoView: true };
+      const i = Math.max(0, Math.min(index, state.records.length - 1));
+      state.active = i;
+
+      $$('.tabBtn', tabsEl).forEach((btn) => {
+        const idx = Number(btn.dataset.idx);
+        const isOn = idx === i;
+        btn.classList.toggle('bg-slate-900', isOn);
+        btn.classList.toggle('text-white', isOn);
+        btn.classList.toggle('bg-white', !isOn);
+        btn.classList.toggle('text-slate-700', !isOn);
+        btn.classList.toggle('border-slate-200', !isOn);
+        btn.classList.toggle('border-slate-900', isOn);
+      });
+
+      $$('.panel', panelsEl).forEach((p) => {
+        const idx = Number(p.dataset.idx);
+        p.classList.toggle('hidden', idx !== i);
+      });
+
+      if (options.scrollTabIntoView) {
+        const activeBtn = tabsEl.querySelector(`.tabBtn[data-idx="${i}"]`);
+        if (activeBtn) activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      }
+
+      // Reposition floating catalog button after tab changes
+      schedulePositionCatalogBtn();
+    }
+
+    function updateTabLabel(idx) {
+      const el = tabsEl.querySelector(`.tabBtn[data-idx="${idx}"] .tabLabel`);
+      if (el) el.textContent = displayName(state.records[idx], idx);
+    }
+
+    function updatePanelTitle(panelEl, idx) {
+      const t = panelEl.querySelector('.panelTitle');
+      if (t) t.textContent = displayName(state.records[idx], idx);
+    }
+
+    function removeAt(idx) {
+      if (state.records.length <= 1) {
+        state.records[0] = makeEmptyRecord();
+        renderAll();
+        schedulePositionCatalogBtn();
+        return;
+      }
+      state.records.splice(idx, 1);
+      if (state.active >= state.records.length) state.active = state.records.length - 1;
+      renderAll();
+    }
+
+    function duplicateAt(idx) {
+      const copy = deepClone(state.records[idx]);
+      state.records.splice(idx + 1, 0, copy);
+      renderAll();
+      setActive(idx + 1);
+    }
+
+    function addForm(prefill) {
+      const record = prefill ? deepClone(prefill) : makeEmptyRecord();
+      state.records.push(record);
+      renderAll();
+      setActive(state.records.length - 1);
+    }
+
+    function renderAll() {
+      tabsEl.innerHTML = '';
+      panelsEl.innerHTML = '';
+
+      state.records.forEach((rec, idx) => {
+        // --- Tab button ---
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.dataset.idx = String(idx);
+        btn.className = 'tabBtn inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold mr-2';
+        btn.innerHTML = `<span class="tabLabel">${displayName(rec, idx)}</span>`;
+        btn.addEventListener('click', () => setActive(idx));
+        tabsEl.appendChild(btn);
+
+        // --- Panel ---
+        const node = panelTpl.content.cloneNode(true);
+        const panel = node.querySelector('article');
+        panel.classList.add('panel');
+        panel.dataset.idx = String(idx);
+
+        // Record patch helper (define early so below handlers can use it safely)
+        const setRecord = (patch) => Object.assign(state.records[idx], patch);
+
+        const typeInput   = $('.typeInput', panel);
+        const nameInput   = $('.nameInput', panel);
+        const suggestBox  = panel.querySelector('.suggestBox');
+        const descInput   = $('.descInput', panel);
+
+        const imgInput    = $('.imgInput', panel);
+        const imgHint     = $('.imgHint', panel);
+        const imgPreview  = $('.imgPreview', panel);
+
+        // Notes: text + handwriting
+        const notesTextInput = $('.notesTextInput', panel);
+        const notesPenBtn    = panel.querySelector('.notesPenBtn');
+        const notesEraserBtn = panel.querySelector('.notesEraserBtn');
+        const notesCanvas    = $('.notesCanvas', panel);
+        const notesClearBtn  = panel.querySelector('.notesClearBtn');
+
+        // Init values
+        typeInput.value = rec.type || '';
+        nameInput.value = rec.name || '';
+        descInput.value = rec.desc || '';
+
+        // ---- Notes helpers (define BEFORE use) ----
+        const getNotesTool = () => (state.records[idx] && state.records[idx].notesTool) ? state.records[idx].notesTool : 'pen';
+
+        // Keep tool state local to this panel; only explicit button clicks may change it.
+        let notesToolLocal = getNotesTool();
+
+        const syncNotesToolUI = () => {
+          const tool = notesToolLocal;
+          if (notesPenBtn) {
+            notesPenBtn.classList.toggle('is-active', tool === 'pen');
+            notesPenBtn.setAttribute('aria-pressed', tool === 'pen' ? 'true' : 'false');
+          }
+          if (notesEraserBtn) {
+            notesEraserBtn.classList.toggle('is-active', tool === 'eraser');
+            notesEraserBtn.setAttribute('aria-pressed', tool === 'eraser' ? 'true' : 'false');
+          }
+        };
+
+        const applyNotesTool = (tool) => {
+          const next = (tool === 'eraser') ? 'eraser' : 'pen';
+          if (notesToolLocal === next) return;
+          notesToolLocal = next;
+          setRecord({ notesTool: notesToolLocal });
+          if (notesCanvas) notesCanvas.dataset.notesTool = notesToolLocal;
+          syncNotesToolUI();
+        };
+
+        // Panel title
+        updatePanelTitle(panel, idx);
+
+        // ---- Notes: typing ----
+        if (notesTextInput) {
+          notesTextInput.value = rec.notesText || '';
+          notesTextInput.addEventListener('input', (e) => setRecord({ notesText: (e.target.value || '') }));
+        }
+
+        // ---- Notes: handwriting ----
+        if (notesCanvas) {
+          // Restore per-item canvas box height (if any)
+          const boxEl = notesCanvas.closest('.notesCanvasBox') || notesCanvas.parentElement;
+          const savedH = (state.records[idx] && state.records[idx].notesBoxH) ? Number(state.records[idx].notesBoxH) : 0;
+          if (boxEl && savedH && savedH > 0) boxEl.style.height = savedH + 'px';
+
+          // Ensure canvas always knows the current tool (prevents any unexpected tool reset)
+          notesCanvas.dataset.notesTool = notesToolLocal;
+          initNotesCanvas(notesCanvas, idx);
+
+          // Restore saved ink or clear
+          if (state.records[idx].notesInk) {
+            restoreCanvasFromDataUrl(notesCanvas, state.records[idx].notesInk);
+          } else {
+            clearNotesCanvas(notesCanvas, { save: false });
+          }
+        }
+
+        if (notesClearBtn && notesCanvas) {
+          notesClearBtn.addEventListener('click', () => clearNotesCanvas(notesCanvas, { save: true, idx }));
+        }
+
+        if (notesPenBtn || notesEraserBtn) {
+          // Initialize UI from current record state (per panel)
+          notesToolLocal = getNotesTool();
+          syncNotesToolUI();
+        }
+
+        if (notesPenBtn) {
+          notesPenBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+          notesPenBtn.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            applyNotesTool('pen');
+          });
+        }
+
+        if (notesEraserBtn) {
+          notesEraserBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+          notesEraserBtn.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            applyNotesTool('eraser');
+          });
+        }
+
+        // ---- Images preview ----
+        if (rec.images && rec.images.length) {
+          imgHint.textContent = `已選擇 ${rec.images.length} 張圖片。`;
+          renderImagePreview(imgPreview, rec.images);
+        }
+
+        // ---- Inputs handlers ----
+        typeInput.addEventListener('change', (e) => setRecord({ type: (e.target.value || '') }));
+
+        // Name input: update record + update tab/title + suggestions
+        const applyPickedName = (picked) => {
+          nameInput.value = picked;
+          setRecord({ name: picked });
+          updateTabLabel(idx);
+          updatePanelTitle(panel, idx);
+          hideSuggestBox(suggestBox);
+        };
+
+        nameInput.addEventListener('input', (e) => {
+          const v = (e.target.value || '');
+          setRecord({ name: v });
+          updateTabLabel(idx);
+          updatePanelTitle(panel, idx);
+
+          const hits = suggestProductNames(v, 8);
+          renderSuggestBox(suggestBox, hits, applyPickedName);
+        });
+
+        nameInput.addEventListener('focus', () => {
+          const hits = suggestProductNames(nameInput.value || '', 8);
+          renderSuggestBox(suggestBox, hits, applyPickedName);
+        });
+
+        nameInput.addEventListener('blur', () => {
+          // Delay so mousedown on an item can run first
+          setTimeout(() => hideSuggestBox(suggestBox), 150);
+        });
+
+        descInput.addEventListener('input', (e) => setRecord({ desc: (e.target.value || '') }));
+
+        // ---- Show PDF ----
+        const showPdfBtn = panel.querySelector('.showPdfBtn');
+        if (showPdfBtn) {
+          showPdfBtn.addEventListener('click', () => {
+            const productName = (state.records[idx].name || '').trim();
+            const pdfItem = findPdfForProductName(productName);
+            openPdfModal(productName || displayName(state.records[idx], idx), pdfItem);
+          });
+        }
+
+        // ---- Images upload ----
+        imgInput.addEventListener('change', async (e) => {
+          const files = Array.from((e.target && e.target.files) ? e.target.files : []);
+          if (!files.length) return;
+
+          const imgs = [];
+          for (const f of files) {
+            const dataUrl = await fileToDataUrl(f);
+            const size = await getImageSize(dataUrl);
+            imgs.push({ name: f.name, dataUrl, width: size.width, height: size.height });
+          }
+
+          const merged = (state.records[idx].images || []).concat(imgs);
+          setRecord({ images: merged });
+
+          imgHint.textContent = `已選擇 ${merged.length} 張圖片。`;
+          renderImagePreview(imgPreview, merged);
+
+          e.target.value = '';
+        });
+
+        $('.clearImgsBtn', panel).addEventListener('click', () => {
+          setRecord({ images: [] });
+          imgHint.textContent = '尚未選擇圖片。';
+          imgPreview.innerHTML = '';
+        });
+
+        // ---- Per-panel actions (mobile) ----
+        $('.addBtn', panel).addEventListener('click', () => addForm());
+        $('.dupBtn', panel).addEventListener('click', () => duplicateAt(idx));
+        $('.delBtn', panel).addEventListener('click', () => removeAt(idx));
+
+        panelsEl.appendChild(node);
+      });
+
+      setActive(Math.min(state.active, state.records.length - 1), { scrollTabIntoView: false });
+
+      // Keep floating catalog button aligned under tab row
+      schedulePositionCatalogBtn();
+    }
+
+    // ---------------- PPTX Export: match template ----------------
+    // NOTE: PptxGenJS is loaded dynamically on click to avoid "button no effect" when CDN fails.
+
+    const TPL = {
+      slideW: 10,
+      slideH: 7.5,
+
+      // Master decorations (from 公版：訪廠問題表格.pptx)
+      decor: {
+        // two stripes at top and bottom
+        x: 0.1076389,
+        w: 9.8263889,
+        topGreenY: 0.4947922,
+        topBlueY: 0.5420770,
+        bottomGreenY: 7.2582707,
+        bottomBlueY: 7.3055556,
+        green: '008000',
+        blue:  '3366FF',
+        lineW: 2
+      },
+
+      footer: {
+        text: '本文件為「全家便利商店股份有限公司」所有，請勿外洩',
+        x: 3.4302592,
+        y: 7.2586811,
+        w: 4.0104167,
+        h: 0.2690967,
+        font: '標楷體',
+        size: 10,
+        color: '000000'
+      },
+
+      impl: {
+        x: 7.9074059,
+        y: 0.6485466,
+        w: 1.9069543,
+        h: 0.4882951,
+        fill: 'FFF2CC',
+        line: '2D4D6A',
+        font: 'Microsoft JhengHei',
+        size: 18,
+        color: '000000',
+        text: '實施日:'
+      },
+
+      title: { x: 0.128, y: 0.014, w: 9.785, h: 0.472, text: '一、調整說明', font: 'Meiryo UI', size: 18, color: '000000' },
+      bar:   { x: 0.227, y: 0.695, w: 9.587, h: 0.442, fill: '2E75B6', textColor: 'FFFF00', font: 'Microsoft JhengHei', size: 18 },
+
+      t1: {
+        x: 0.277, y: 1.183, w: 9.488, h: 3.545,
+        colW: 4.744, headH: 0.748, bodyH: 2.797,
+        headFill: 'DEEAF7',
+        border: '4A4E52',
+        sep: '414243',
+        headFont: 'Microsoft JhengHei',
+        headSize: 16
+      },
+
+      t2: {
+        x: 0.277, y: 4.728, w: 9.488, h: 2.478,
+        colW: 4.744, rowH: 0.62,
+        border: '000000',
+        font: 'Microsoft JhengHei',
+        size: 14
+      },
+
+      photoPad: 0.15
+    };
+
+    function formatExportError(err) {
+      const msg = err && err.message ? err.message : String(err);
+      return `PPT 匯出失敗：\n${msg}`;
+    }
+
+    function drawTemplate(slide, rec, pptx) {
+      // Background (white) — use shape for maximum compatibility
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 0, w: TPL.slideW, h: TPL.slideH,
+        fill: { color: 'FFFFFF' },
+        line: { color: 'FFFFFF', width: 0 }
+      });
+
+      
+      // Master top/bottom stripes (全家公版裝飾)
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.topGreenY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.green, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.topBlueY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.blue, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.bottomGreenY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.green, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.bottomBlueY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.blue, width: TPL.decor.lineW }
+      });
+
+      // Footer disclaimer text (master)
+      slide.addText(TPL.footer.text, {
+        x: TPL.footer.x, y: TPL.footer.y, w: TPL.footer.w, h: TPL.footer.h,
+        fontFace: TPL.footer.font, fontSize: TPL.footer.size,
+        color: TPL.footer.color, align: 'center', valign: 'mid'
+      });
+
+      
+
+
+
+slide.addText(TPL.title.text, {
+        x: TPL.title.x, y: TPL.title.y, w: TPL.title.w, h: TPL.title.h,
+        fontFace: TPL.title.font, fontSize: TPL.title.size, color: TPL.title.color,
+        valign: 'mid', align: 'left'
+      });
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: TPL.bar.x, y: TPL.bar.y, w: TPL.bar.w, h: TPL.bar.h,
+        fill: { color: TPL.bar.fill }, line: { color: TPL.bar.fill, width: 0 }
+      });
+
+      const typeTxt = (rec.type || '【類型】').trim();
+      const nameTxt = (rec.name || '【商品名】').trim();
+
+      // Header text: 類型 = 黃色；商品名 = 白色（避免整段都黃）
+      const headerRuns = [
+        { text: typeTxt, options: { color: 'FFFF00', bold: true } },
+        { text: '-',      options: { color: 'FFFFFF', bold: true } },
+        { text: nameTxt,  options: { color: 'FFFFFF', bold: true } },
+      ];
+
+      // PptxGenJS v3 supports rich text runs (array). If not, fall back to two text boxes.
+      try {
+        slide.addText(headerRuns, {
+          x: TPL.bar.x, y: TPL.bar.y, w: TPL.bar.w, h: TPL.bar.h,
+          fontFace: TPL.bar.font, fontSize: TPL.bar.size,
+          align: 'center', valign: 'mid'
+        });
+      } catch (e) {
+        // Fallback: approximate centering by splitting the bar into two regions
+        slide.addText(typeTxt, {
+          x: TPL.bar.x, y: TPL.bar.y, w: TPL.bar.w * 0.35, h: TPL.bar.h,
+          fontFace: TPL.bar.font, fontSize: TPL.bar.size, bold: true,
+          color: 'FFFF00', align: 'right', valign: 'mid'
+        });
+        slide.addText('-' + nameTxt, {
+          x: TPL.bar.x + TPL.bar.w * 0.35, y: TPL.bar.y, w: TPL.bar.w * 0.65, h: TPL.bar.h,
+          fontFace: TPL.bar.font, fontSize: TPL.bar.size, bold: true,
+          color: 'FFFFFF', align: 'left', valign: 'mid'
+        });
+      }
+const t1 = TPL.t1;
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: t1.x, y: t1.y, w: t1.w, h: t1.h,
+        fill: { color: 'FFFFFF', transparency: 100 },
+        line: { color: t1.border, width: 1 }
+      });
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: t1.x, y: t1.y, w: t1.colW, h: t1.headH,
+        fill: { color: t1.headFill }, line: { color: t1.border, width: 1 }
+      });
+      slide.addShape(pptx.ShapeType.rect, {
+        x: t1.x + t1.colW, y: t1.y, w: t1.colW, h: t1.headH,
+        fill: { color: t1.headFill }, line: { color: t1.border, width: 1 }
+      });
+
+      slide.addShape(pptx.ShapeType.line, {
+        x: t1.x + t1.colW, y: t1.y, w: 0, h: t1.h,
+        line: { color: '000000', width: 1 }
+      });
+
+      slide.addShape(pptx.ShapeType.line, {
+        x: t1.x, y: t1.y + t1.headH, w: t1.w, h: 0,
+        line: { color: t1.sep, width: 1 }
+      });
+
+      slide.addText('改善前', {
+        x: t1.x, y: t1.y, w: t1.colW, h: t1.headH,
+        fontFace: t1.headFont, fontSize: t1.headSize, bold: true,
+        color: '000000', align: 'center', valign: 'mid'
+      });
+      slide.addText('改善後', {
+        x: t1.x + t1.colW, y: t1.y, w: t1.colW, h: t1.headH,
+        fontFace: t1.headFont, fontSize: t1.headSize, bold: true,
+        color: '000000', align: 'center', valign: 'mid'
+      });
+
+      const t2 = TPL.t2;
+
+      slide.addShape(pptx.ShapeType.rect, {
+        x: t2.x, y: t2.y, w: t2.w, h: t2.h,
+        fill: { color: 'FFFFFF', transparency: 100 },
+        line: { color: t2.border, width: 1 }
+      });
+
+      slide.addShape(pptx.ShapeType.line, {
+        x: t2.x + t2.colW, y: t2.y, w: 0, h: t2.h,
+        line: { color: t2.border, width: 1 }
+      });
+
+      // 橫線：只畫右側 PDCA 區（左側回答框不畫橫線）
+      const rightX = t2.x + t2.colW;
+      const rightW = t2.w - t2.colW;
+      for (let i = 1; i <= 3; i++) {
+        slide.addShape(pptx.ShapeType.line, {
+          x: rightX,
+          y: t2.y + t2.rowH * i,
+          w: rightW,
+          h: 0,
+          line: { color: t2.border, width: 1 }
+        });
+      }
+
+      // 左上標籤：只保留「P(問題)」，並稍微下移避免貼邊
+      slide.addText('P(問題)', {
+        x: t2.x + 0.10,
+        y: t2.y + 0.06,
+        w: t2.colW - 0.20,
+        h: 0.35,
+        fontFace: t2.font,
+        fontSize: t2.size,
+        color: '000000',
+        align: 'left',
+        valign: 'top'
+      });
+
+      const pdca = ['P：', 'D：', 'C：', 'A：'];
+      pdca.forEach((lab, i) => {
+        slide.addText(lab, {
+          x: t2.x + t2.colW + 0.12, y: t2.y + t2.rowH * i,
+          w: t2.colW - 0.24, h: t2.rowH,
+          fontFace: t2.font, fontSize: t2.size, color: '000000',
+          align: 'left', valign: 'mid'
+        });
+      });
+      const desc = (rec.desc || '').trim();
+if (desc) {
+        // 左側回答框：整塊空白區（無橫線），文字從標籤下方開始
+        slide.addText(desc, {
+          x: t2.x + 0.12,
+          y: t2.y + 0.48,
+          w: t2.colW - 0.24,
+          h: t2.h - 0.60,
+          fontFace: t2.font,
+          fontSize: 12,
+          color: '111111',
+          align: 'left',
+          valign: 'top'
+        });
+      }
+
+      // 實施日（置頂顯示：確保在所有圖層最上方）
+      // 實施日（表單不填寫；PPT 保留給對方填）
+            slide.addShape(pptx.ShapeType.roundRect, {
+              x: TPL.impl.x, y: TPL.impl.y, w: TPL.impl.w, h: TPL.impl.h,
+              fill: { color: TPL.impl.fill },
+              line: { color: TPL.impl.line, width: 1 }
+            });
+            slide.addText(TPL.impl.text, {
+              x: TPL.impl.x + 0.10, y: TPL.impl.y, w: TPL.impl.w - 0.20, h: TPL.impl.h,
+              fontFace: TPL.impl.font, fontSize: TPL.impl.size,
+              color: TPL.impl.color, align: 'left', valign: 'mid'
+            });
+
+}
+    function drawNotesSlide(slide, rec, pptx) {
+      // Master background + stripes + footer (same as main)
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 0, y: 0, w: TPL.slideW, h: TPL.slideH,
+        fill: { color: 'FFFFFF' },
+        line: { color: 'FFFFFF', width: 0 }
+      });
+
+      // Stripes
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.topGreenY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.green, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.topBlueY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.blue, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.bottomGreenY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.green, width: TPL.decor.lineW }
+      });
+      slide.addShape(pptx.ShapeType.line, {
+        x: TPL.decor.x, y: TPL.decor.bottomBlueY, w: TPL.decor.w, h: 0,
+        line: { color: TPL.decor.blue, width: TPL.decor.lineW }
+      });
+
+      // Footer
+      slide.addText(TPL.footer.text, {
+        x: TPL.footer.x, y: TPL.footer.y, w: TPL.footer.w, h: TPL.footer.h,
+        fontFace: TPL.footer.font, fontSize: TPL.footer.size,
+        color: TPL.footer.color, align: 'center', valign: 'mid'
+      });
+
+      // Title
+      slide.addText('內容記錄', {
+        x: 0.128, y: 0.06, w: 9.785, h: 0.5,
+        fontFace: 'Microsoft JhengHei', fontSize: 24, bold: true,
+        color: '000000', align: 'left', valign: 'mid'
+      });
+
+      const text = (rec.notesText || '').trim();
+      const ink  = (rec.notesInk  || '').trim();
+
+      // Main notes box
+      const box = { x: 0.227, y: 0.75, w: 9.587, h: 6.35 };
+
+      // Outer border
+      slide.addShape(pptx.ShapeType.rect, {
+        x: box.x, y: box.y, w: box.w, h: box.h,
+        fill: { color: 'FFFFFF', transparency: 100 },
+        line: { color: '000000', width: 1 }
+      });
+
+      // Helper: add typed text area
+      const addTyped = (x, y, w, h) => {
+        if (!text) return;
+        slide.addText(text, {
+          x, y, w, h,
+          fontFace: 'Microsoft JhengHei',
+          fontSize: 14,
+          color: '111111',
+          align: 'left',
+          valign: 'top'
+        });
+      };
+
+      // Helper: add ink image area
+      const addInk = (x, y, w, h) => {
+        if (!ink) return;
+        slide.addImage({
+          data: ink,
+          x, y, w, h,
+          sizing: { type: 'contain', x, y, w, h }
+        });
+      };
+
+      // Layout rules:
+      // - text+ink: split left/right
+      // - only text: full box
+      // - only ink: full box
+      if (text && ink) {
+        const midX = box.x + box.w / 2;
+
+        // Divider
+        slide.addShape(pptx.ShapeType.line, {
+          x: midX, y: box.y, w: 0, h: box.h,
+          line: { color: '000000', width: 1 }
+        });
+
+        // Small labels
+        slide.addText('內容記錄（打字）', {
+          x: box.x + 0.12, y: box.y + 0.05, w: box.w / 2 - 0.24, h: 0.3,
+          fontFace: 'Microsoft JhengHei', fontSize: 12, color: '444444',
+          align: 'left', valign: 'mid'
+        });
+        slide.addText('內容記錄（手寫）', {
+          x: midX + 0.12, y: box.y + 0.05, w: box.w / 2 - 0.24, h: 0.3,
+          fontFace: 'Microsoft JhengHei', fontSize: 12, color: '444444',
+          align: 'left', valign: 'mid'
+        });
+
+        // Content regions
+        addTyped(box.x + 0.12, box.y + 0.40, box.w / 2 - 0.24, box.h - 0.52);
+        addInk(midX + 0.12, box.y + 0.40, box.w / 2 - 0.24, box.h - 0.52);
+      } else if (text) {
+        addTyped(box.x + 0.12, box.y + 0.12, box.w - 0.24, box.h - 0.24);
+      } else if (ink) {
+        addInk(box.x + 0.12, box.y + 0.12, box.w - 0.24, box.h - 0.24);
+      } else {
+        // Keep the placeholder center text when both empty
+        slide.addText('(內容記錄)', {
+          x: box.x, y: box.y + box.h / 2 - 0.25, w: box.w, h: 0.5,
+          fontFace: 'Microsoft JhengHei', fontSize: 18,
+          color: '555555', align: 'center', valign: 'mid'
+        });
+      }
+    }
+
+
+
+    function addPhotos(slide, pair) {
+      if (!pair || (!pair[0] && !pair[1])) return;
+
+      const t1 = TPL.t1;
+      const bodyY = t1.y + t1.headH;
+      const pad = TPL.photoPad;
+
+      const leftBox  = { x: t1.x + pad,           y: bodyY + pad, w: t1.colW - pad * 2, h: t1.bodyH - pad * 2 };
+      const rightBox = { x: t1.x + t1.colW + pad, y: bodyY + pad, w: t1.colW - pad * 2, h: t1.bodyH - pad * 2 };
+
+      const put = (img, box) => {
+        if (!img) return;
+        slide.addImage({
+          data: img.dataUrl,
+          x: box.x, y: box.y, w: box.w, h: box.h,
+          sizing: { type: 'contain', x: box.x, y: box.y, w: box.w, h: box.h }
+        });
+      };
+
+      put(pair[0], leftBox);
+      put(pair[1], rightBox);
+    }
+
+    async function exportPPT() {
+      // Ensure library available; otherwise show actionable error
+      const ok = await ensurePptxGenLoaded();
+      if (!ok || !window.PptxGenJS) {
+        alert('無法載入 PPT 匯出元件（PptxGenJS）。\n\n可能原因：網路環境封鎖 CDN 或離線。\n解法：\n1) 改用可連外的網路開啟此頁；或\n2) 下載 pptxgen.bundle.js 放在此 HTML 同一資料夾（離線模式）。');
+        return;
+      }
+
+      if (!state.records.length) { alert('目前沒有資料可匯出。'); return; }
+
+      const hasAny = state.records.some(r => (r.type || r.name || r.notesText || r.desc || r.notesInk || (r.images && r.images.length)));
+      if (!hasAny) { alert('資料皆為空白，請至少填寫一筆內容或上傳圖片。'); return; }
+
+      let pptx;
+      try {
+        pptx = new window.PptxGenJS();
+        pptx.layout = 'LAYOUT_4x3';
+      } catch (e) {
+        alert(formatExportError(e));
+        return;
+      }
+
+      for (const rec of state.records) {
+        const imgs = rec.images || [];
+        const pages = imgs.length ? chunk(imgs, 2) : [ [] ];
+        pages.forEach((pair) => {
+          const slide = pptx.addSlide();
+          drawTemplate(slide, rec, pptx);
+          addPhotos(slide, pair);
+        });
+
+        // 額外：內容記錄（打字/手寫）— 若任一有內容，新增一張「內容記錄」投影片
+        const hasNotesText = ((rec.notesText || '').trim().length > 0);
+        const hasNotesInk  = ((rec.notesInk  || '').trim().length > 0);
+        if (hasNotesText || hasNotesInk) {
+          const nslide = pptx.addSlide();
+          drawNotesSlide(nslide, rec, pptx);
+        }
+      }const fnDate = todayISO().split('-').join('');
+      const filename = `訪廠問題表格_${fnDate}.pptx`;
+
+      try {
+        await pptx.writeFile({ fileName: filename });
+      } catch (err) {
+        console.error(err);
+        alert(formatExportError(err));
+      }
+    }
+
+    // ---------------- Catalog ----------------
+    function openCatalog() {
+      const modal = $('#catalogModal');
+      const list = $('#catalogList');
+      list.innerHTML = '';
+
+      state.records.forEach((rec, idx) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'w-full text-left rounded-xl border px-3 py-3 hover:bg-slate-50 flex items-center justify-between gap-3';
+        const name = displayName(rec, idx);
+        const sub = (rec.type || '').trim();
+        btn.innerHTML = `
+          <div class="min-w-0">
+            <div class="text-sm font-semibold truncate">${name}</div>
+            <div class="text-xs text-slate-500 truncate">${sub ? sub : ''}</div>
+          </div>
+          <div class="text-xs text-slate-400 shrink-0">第 ${idx + 1} 筆</div>
+        `;
+        btn.addEventListener('click', () => {
+          closeCatalog();
+          setActive(idx);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        list.appendChild(btn);
+      });
+
+      modal.classList.remove('hidden');
+      document.body.classList.add('overflow-hidden');
+    }
+
+    function closeCatalog() {
+      const modal = $('#catalogModal');
+      modal.classList.add('hidden');
+      document.body.classList.remove('overflow-hidden');
+    }
+
+    
+    function positionCatalogBtn() {
+      const btn = document.getElementById('catalogBtn');
+      const bar = document.getElementById('tabsBar');
+      const tabs = document.getElementById('tabs');
+      if (!btn || !bar || !tabs) return;
+
+      const barRect = bar.getBoundingClientRect();
+      const tabsRect = tabs.getBoundingClientRect();
+
+      // Align to the left edge of the tab strip; place just below the tabs bar
+      const left = Math.max(8, Math.round(tabsRect.left));
+      const top = Math.round(barRect.bottom + 8);
+
+      btn.style.left = left + 'px';
+      btn.style.top = top + 'px';
+    }
+
+    let _posRaf = 0;
+    function schedulePositionCatalogBtn() {
+      if (_posRaf) return;
+      _posRaf = requestAnimationFrame(() => {
+        _posRaf = 0;
+        positionCatalogBtn();
+      });
+    }
+
+    // ---------------- Init ----------------
+    $('#addRowBtn').addEventListener('click', () => addForm());
+    $('#exportBtn').addEventListener('click', exportPPT);
+
+    // Drive import (Apps Script Web App)
+    const driveBtn = document.getElementById('driveImportBtn');
+    if (driveBtn) driveBtn.addEventListener('click', openDriveModal);
+
+// Delegated handlers for Drive modal (bind once; avoid duplicated alerts)
+    let __driveDelegatesBound = false;
+    function bindDriveDelegatesOnce() {
+      if (__driveDelegatesBound) return;
+      __driveDelegatesBound = true;
+
+      // 全選（只作用於目前可見清單）
+      document.addEventListener('change', (e) => {
+        const t = e.target;
+        if (t && t.id === 'driveSelectAll') {
+          setAllVisibleDriveChecks(!!t.checked);
+        }
+      }, true);
+
+      // 搜尋：即時篩選
+      document.addEventListener('input', (e) => {
+        const t = e.target;
+        if (t && t.id === 'driveSearch') {
+          renderDriveList(driveCache);
+          syncDriveSelectAllState();
+        }
+      }, true);
+
+      // 匯入／重新載入／關閉（含點擊遮罩）
+      document.addEventListener('click', (e) => {
+        const t = e.target;
+        const el = (t && t.nodeType === 1) ? t : (t && t.parentElement ? t.parentElement : null);
+        if (!el) return;
+
+        try {
+          if (el.closest && el.closest('#driveImportSelectedBtn')) {
+            importSelectedFromDrive();
+            return;
+          }
+        } catch (err) {}
+
+        try {
+          if (el.closest && el.closest('#driveRefreshBtn')) {
+            loadDriveList();
+            return;
+          }
+        } catch (err) {}
+
+        try {
+          if (el.closest && el.closest('#closeDriveBtn')) {
+            closeDriveModal();
+            return;
+          }
+        } catch (err) {}
+
+        if (el.dataset && el.dataset.closeDrive === 'true') {
+          closeDriveModal();
+        }
+      }, true);
+    }
+
+    bindDriveDelegatesOnce();
+
+
+// PDF import buttons
+    const pdfInputEl = document.getElementById('pdfInput');
+    const hookImport = () => { if (pdfInputEl) pdfInputEl.click(); };
+
+    const importBtnHeader = document.getElementById('importPdfBtnHeader');
+    if (importBtnHeader) importBtnHeader.addEventListener('click', hookImport);
+
+    if (pdfInputEl) {
+      pdfInputEl.addEventListener('change', async (e) => {
+        const files = Array.from((e.target && e.target.files) ? e.target.files : []);
+        await importPdfFiles(files);
+        e.target.value = '';
+      });
+    }
+
+    // PDF modal close
+    const closePdfBtn = document.getElementById('closePdfBtn');
+    if (closePdfBtn) closePdfBtn.addEventListener('click', closePdfModal);
+    const pdfModal = document.getElementById('pdfModal');
+    if (pdfModal) {
+      pdfModal.addEventListener('click', (e) => {
+        const t = e.target;
+        if (t && t.dataset && t.dataset.closePdf === 'true') closePdfModal();
+      });
+    }
+
+    // Fallback: delegated close handling (works even if modal DOM is injected after scripts)
+    document.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!target) return;
+
+      // Close button
+      if (target.closest && target.closest('#closePdfBtn')) {
+        closePdfModal();
+        return;
+      }
+
+      // Click on backdrop
+      if (target.dataset && target.dataset.closePdf === 'true') {
+        closePdfModal();
+        return;
+      }
+    });
+
+
+
+    $('#dupActiveBtn').addEventListener('click', () => duplicateAt(state.active));
+    $('#delActiveBtn').addEventListener('click', () => removeAt(state.active));
+
+    $('#catalogBtn').addEventListener('click', openCatalog);
+    $('#closeCatalogBtn').addEventListener('click', closeCatalog);
+    $('#catalogModal').addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.dataset && t.dataset.close === 'true') closeCatalog();
+    });
+
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeCatalog(); closePdfModal(); closeDriveModal(); } });
+
+    window.addEventListener('resize', schedulePositionCatalogBtn);
+    window.addEventListener('scroll', schedulePositionCatalogBtn, { passive: true });
+
+    // Start
+    state.records = [ makeEmptyRecord() ];
+    renderAll();
+    schedulePositionCatalogBtn();
+  </script>
+
+  <!-- PDF modal (排關圖) -->
+  <div id="pdfModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/40" data-close-pdf="true"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-3">
+      <div class="w-full max-w-5xl rounded-2xl bg-white shadow-xl overflow-hidden">
+        <div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">排關圖</div>
+            <div id="pdfTitle" class="text-xs text-slate-500 truncate">—</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <a id="pdfOpenBtn" class="hidden rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50" target="_blank" rel="noopener">新視窗開啟</a>
+            <button type="button" id="closePdfBtn" class="rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">關閉</button>
+          </div>
+        </div>
+
+        <div class="p-3">
+          <div id="pdfEmpty" class="hidden rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
+            找不到符合「商品名」的排關圖。請先點「匯入排關圖」上傳 PDF，或確認商品名是否正確。
+            <div class="mt-3 text-xs text-slate-500">
+              已匯入清單：<span id="pdfListText">（無）</span>
+            </div>
+          </div>
+
+          <div id="pdfRender" class="hidden w-full h-[75vh] rounded-xl border overflow-auto bg-white"></div>
+          <iframe id="pdfFrame" class="hidden w-full h-[75vh] rounded-xl border" title="排關圖 PDF"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Drive modal (從雲端匯入排關圖) -->
+  <div id="driveModal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black/40" data-close-drive="true"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-3">
+      <div class="w-full max-w-5xl rounded-2xl bg-white shadow-xl overflow-hidden">
+        <div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold">從 Google Drive 資料夾匯入排關圖</div>
+            <div class="text-xs text-slate-500">
+              資料夾：<span class="font-mono" id="driveFolderIdText">—</span>
+              <span class="mx-2">•</span>
+              已載入：<span id="driveCountText">0</span> 份 PDF
+            </div>
+          </div>
+          <button type="button" id="closeDriveBtn" class="rounded-xl border px-3 py-1.5 text-xs font-semibold hover:bg-slate-50">關閉</button>
+        </div>
+
+        <div class="p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="relative flex-1 min-w-[220px]">
+              <input id="driveSearch" class="w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring" placeholder="搜尋商品名 / 檔名（輸入關鍵字）" />
+            </div>
+            <button id="driveRefreshBtn" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">重新載入</button>
+            <button type="button" id="driveImportSelectedBtn" class="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700">匯入已勾選</button>
+          </div>
+
+          <div id="driveHint" class="mt-3 text-xs text-slate-500">
+            提示：此功能需要將本頁部署為 Apps Script Web App（同部門少數人存取）。若你以本機 HTML 開啟，會無法直接連到 Drive。
+          </div>
+
+          <div class="mt-3 rounded-2xl border overflow-hidden">
+            <div class="grid grid-cols-12 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+              <div class="col-span-1"><label class="inline-flex items-center gap-2 cursor-pointer"><input id="driveSelectAll" type="checkbox" class="rounded"> 全選</label></div>
+              <div class="col-span-7">檔名 / 商品名（解析）</div>
+              <div class="col-span-2">大小</div>
+              <div class="col-span-2">更新時間</div>
+            </div>
+            <div id="driveList" class="max-h-[60vh] overflow-auto"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
