@@ -101,6 +101,12 @@
       height: auto !important;
       flex: 1 1 auto !important;
       overflow: auto !important;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* iPad / mobile：讓容器本身具備慣性滾動（非全螢幕也適用） */
+    .pdfInlineRender {
+      -webkit-overflow-scrolling: touch;
     }
 
     .pdfInlineWrap.is-fullscreen .pdfHeaderBar {
@@ -5232,15 +5238,23 @@ function attachPinchZoomToInlinePdf_() {
   pdfInlineRender.__pinchBound = true;
 
   let gesturing = false;
+  let pinchActive = false;
   let startDist = 0;
   let startZoom = 1;
   let lastZoom = 1;
 
-  // Two-finger pan baseline
-  let startMidX = 0;
-  let startMidY = 0;
-  let startScrollLeft = 0;
-  let startScrollTop = 0;
+  // Incremental pan baseline
+  let lastMidX = 0;
+  let lastMidY = 0;
+  let curScrollLeft = 0;
+  let curScrollTop = 0;
+
+  // Preview scale tracking
+  let lastPreviewRatio = 1;
+
+  // rAF batching (avoid jank on iPad)
+  let rafId = 0;
+  let pending = null; // { sl, st, pr }
 
   let commitTimer = null;
 
@@ -5267,17 +5281,20 @@ function attachPinchZoomToInlinePdf_() {
     const wrap = pagesWrap_();
     if (!wrap) return;
     const r = Math.max(0.5, Math.min(3.5, Number(ratio) || 1));
-    wrap.style.transform = `scale(${r})`;
+    // Debounce tiny ratio noise (common on iPad)
+    if (Math.abs(r - lastPreviewRatio) < 0.008) return;
+    lastPreviewRatio = r;
+    wrap.style.willChange = 'transform';
     wrap.style.transformOrigin = '0 0';
-    // keep layout width stable while scaling
-    try { wrap.style.width = `${100 / r}%`; } catch (_) {}
+    wrap.style.transform = `translateZ(0) scale(${r})`;
   };
 
   const clearPreviewScale_ = () => {
     const wrap = pagesWrap_();
     if (!wrap) return;
     wrap.style.transform = '';
-    wrap.style.width = '';
+    wrap.style.willChange = '';
+    lastPreviewRatio = 1;
   };
 
   const disableInk_ = (v) => {
@@ -5290,29 +5307,54 @@ function attachPinchZoomToInlinePdf_() {
     } catch (_) {}
   };
 
+  const scheduleFrame_ = () => {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      if (!pending) return;
+      const { sl, st, pr } = pending;
+      pending = null;
+      try {
+        if (typeof sl === 'number') pdfInlineRender.scrollLeft = sl;
+        if (typeof st === 'number') pdfInlineRender.scrollTop = st;
+      } catch (_) {}
+      if (typeof pr === 'number') {
+        setPreviewScale_(pr);
+      }
+    });
+  };
+
+  // Ensure scrolling feels native on iPad
+  try { pdfInlineRender.style.webkitOverflowScrolling = 'touch'; } catch (_) {}
+  try { pdfInlineRender.style.touchAction = 'none'; } catch (_) {}
+
   pdfInlineRender.addEventListener('touchstart', (e) => {
     if (!e.touches || e.touches.length !== 2) return;
 
-    // Start gesture (pinch + pan)
     ensurePdfPrefs_();
     const rec = state.records[idx];
+
     gesturing = true;
+    pinchActive = false;
     pdfInlineRender._pinching = true;
+
+    // reset preview
+    clearPreviewScale_();
 
     startDist = dist_(e.touches[0], e.touches[1]);
     startZoom = clampZoom_(rec.pdfZoomFactor || 1);
     lastZoom = startZoom;
 
     const m = mid_(e.touches[0], e.touches[1]);
-    startMidX = m.x;
-    startMidY = m.y;
-    startScrollLeft = pdfInlineRender.scrollLeft;
-    startScrollTop = pdfInlineRender.scrollTop;
+    lastMidX = m.x;
+    lastMidY = m.y;
+    curScrollLeft = pdfInlineRender.scrollLeft;
+    curScrollTop  = pdfInlineRender.scrollTop;
 
     // Temporarily disable ink while 2-finger gesturing
     disableInk_(true);
 
-    // Prevent page scroll while gesturing inside the viewer
+    // Prevent page scroll/zoom while gesturing inside the viewer
     e.preventDefault();
   }, { passive: false, capture: true });
 
@@ -5320,42 +5362,60 @@ function attachPinchZoomToInlinePdf_() {
     if (!gesturing) return;
     if (!e.touches || e.touches.length < 2) return;
 
-    // --- Pan (two-finger drag) ---
-    const m = mid_(e.touches[0], e.touches[1]);
-    const dx = (m.x - startMidX);
-    const dy = (m.y - startMidY);
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
 
-    // Natural "grab to move" feel:
-    // - fingers move down  => view moves down (scrollTop decreases)
-    // - fingers move right => view moves right (scrollLeft decreases)
-    try {
-      pdfInlineRender.scrollLeft = startScrollLeft - dx;
-      pdfInlineRender.scrollTop  = startScrollTop  - dy;
-    } catch (_) {}
+    // --- Pan (incremental, smoother than absolute baselining) ---
+    const m = mid_(t1, t2);
+    const dx = (m.x - lastMidX);
+    const dy = (m.y - lastMidY);
+    lastMidX = m.x;
+    lastMidY = m.y;
 
-    // --- Pinch (zoom) ---
-    const d = dist_(e.touches[0], e.touches[1]);
+    // Natural "grab" feel
+    curScrollLeft -= dx;
+    curScrollTop  -= dy;
+
+    // --- Pinch (only activate when user meaningfully pinches) ---
+    let pr = null;
     if (startDist && startDist > 0) {
+      const d = dist_(t1, t2);
       const ratio = d / startDist;
-      lastZoom = clampZoom_(startZoom * ratio);
+      const nextZoom = clampZoom_(startZoom * ratio);
 
-      // Preview scale relative to the current rendered zoom
-      const previewRatio = startZoom ? (lastZoom / startZoom) : 1;
-      setPreviewScale_(previewRatio);
+      // Activation threshold to avoid jitter when user is only panning
+      if (!pinchActive) {
+        if (Math.abs(d - startDist) >= 10 || Math.abs(nextZoom - startZoom) >= 0.03) {
+          pinchActive = true;
+        }
+      }
+
+      if (pinchActive) {
+        // Debounce tiny zoom noise
+        if (Math.abs(nextZoom - lastZoom) >= 0.006) {
+          lastZoom = nextZoom;
+        }
+        pr = startZoom ? (lastZoom / startZoom) : 1;
+      }
     }
+
+    pending = { sl: curScrollLeft, st: curScrollTop, pr };
+    scheduleFrame_();
 
     e.preventDefault();
   }, { passive: false, capture: true });
 
   const end_ = (e) => {
     if (!gesturing) return;
-    // When remaining touches are < 2, end gesture
     if (e.touches && e.touches.length >= 2) return;
 
     gesturing = false;
     pdfInlineRender._pinching = false;
 
+    // Stop preview transform
     clearPreviewScale_();
+
+    // Restore ink
     disableInk_(false);
 
     ensurePdfPrefs_();
@@ -5363,7 +5423,7 @@ function attachPinchZoomToInlinePdf_() {
     const nextZoom = clampZoom_(lastZoom);
 
     // Only commit (re-render) when zoom changed meaningfully.
-    const zoomChanged = Math.abs(nextZoom - startZoom) > 0.02;
+    const zoomChanged = pinchActive && (Math.abs(nextZoom - startZoom) > 0.02);
     if (zoomChanged) rec.pdfZoomFactor = nextZoom;
 
     if (commitTimer) clearTimeout(commitTimer);
@@ -5373,7 +5433,7 @@ function attachPinchZoomToInlinePdf_() {
           await refreshInlinePdfPreview();
         }
       } catch (_) {}
-    }, 80);
+    }, 120);
 
     e.preventDefault();
   };
@@ -5381,6 +5441,7 @@ function attachPinchZoomToInlinePdf_() {
   pdfInlineRender.addEventListener('touchend', end_, { passive: false, capture: true });
   pdfInlineRender.addEventListener('touchcancel', end_, { passive: false, capture: true });
 }
+
 
 attachPinchZoomToInlinePdf_();
 
