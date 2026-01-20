@@ -5182,6 +5182,33 @@ function showInlinePdf(show) {
   }
 }
 
+function collapseInlinePdf_() {
+  try {
+    if (pdfInlineWrap && pdfInlineWrap.classList.contains('is-fullscreen')) {
+      try { exitPdfFullscreen_(); } catch (_) {}
+    }
+  } catch (_) {}
+
+  // Hide any open settings/panels
+  try { if (pdfPenSettings) pdfPenSettings.classList.add('hidden'); } catch (_) {}
+  try {
+    if (pdfInlineWrap && pdfInlineWrap._fsUi) {
+      const ui = pdfInlineWrap._fsUi;
+      if (ui && ui.panel) ui.panel.classList.add('hidden');
+    }
+  } catch (_) {}
+
+  showInlinePdf(false);
+
+  // Return focus back to the form area (similar to normal collapse behavior)
+  try {
+    setTimeout(() => {
+      try { (showPdfBtn || panel).scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (_) {}
+    }, 50);
+  } catch (_) {}
+}
+
+
 async function refreshInlinePdfPreview() {
   if (!pdfInlineRender) return;
 
@@ -5412,28 +5439,48 @@ function attachPinchZoomToInlinePdf_() {
     gesturing = false;
     pdfInlineRender._pinching = false;
 
-    // Stop preview transform
-    clearPreviewScale_();
-
-    // Restore ink
-    disableInk_(false);
+    // Stop any pending frame updates (avoid late preview updates after end)
+    try {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      pending = null;
+    } catch (_) {}
 
     ensurePdfPrefs_();
     const rec = state.records[idx];
     const nextZoom = clampZoom_(lastZoom);
 
-    // Only commit (re-render) when zoom changed meaningfully.
-    const zoomChanged = pinchActive && (Math.abs(nextZoom - startZoom) > 0.02);
+    // Decide whether the user actually pinched (vs. pure pan)
+    const didPinch = pinchActive || (Math.abs(nextZoom - startZoom) > 0.008);
+
+    // Commit zoom with a smaller threshold so it doesn't snap back on iPad
+    const zoomChanged = didPinch && (Math.abs(nextZoom - startZoom) > 0.004);
     if (zoomChanged) rec.pdfZoomFactor = nextZoom;
+
+    // Restore ink after gesture ends
+    disableInk_(false);
+
+    // If user pinched, keep the preview transform until re-render completes to avoid jump-back
+    if (!zoomChanged) {
+      clearPreviewScale_();
+    }
 
     if (commitTimer) clearTimeout(commitTimer);
     commitTimer = setTimeout(async () => {
-      try {
-        if (zoomChanged && pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) {
+      if (zoomChanged && pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) {
+        try {
           await refreshInlinePdfPreview();
+        } catch (_) {
+          // If render fails, remove preview transform to avoid being stuck
+          try { clearPreviewScale_(); } catch (_) {}
+        } finally {
+          // Ensure preview transform is cleared after re-render
+          try { clearPreviewScale_(); } catch (_) {}
         }
-      } catch (_) {}
-    }, 120);
+      } else {
+        // No zoom commit; ensure preview is cleared
+        try { clearPreviewScale_(); } catch (_) {}
+      }
+    }, 80);
 
     e.preventDefault();
   };
@@ -5549,14 +5596,29 @@ function ensurePdfFullscreenUi_() {
 
   fabBtn.addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
+    const wasHidden = panel.classList.contains('hidden');
     panel.classList.toggle('hidden');
+
+    // In fullscreen: opening the toolbar defaults to pen tool (annotation ON with pen).
+    if (wasHidden) {
+      try {
+        ensurePdfPrefs_();
+        const rec = state.records[idx] || {};
+        const penActive = !!rec.pdfAnnoMode && rec.pdfAnnoTool === 'pen';
+        if (!penActive) {
+          if (pdfAnnoToggleBtn) pdfAnnoToggleBtn.click();
+        }
+      } catch (_) {}
+    }
+
     sync();
   });
 
   if (closePanelBtn) {
     closePanelBtn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
-      panel.classList.add('hidden');
+      try { collapseInlinePdf_(); }
+      catch (_) { try { panel.classList.add('hidden'); } catch (_) {} }
     });
   }
 
@@ -5728,13 +5790,13 @@ if (showPdfBtn) {
       showInlinePdf(true);
       await refreshInlinePdfPreview();
     } else {
-      showInlinePdf(false);
+      collapseInlinePdf_();
     }
   });
 }
 
 if (closePdfInlineBtn) {
-  closePdfInlineBtn.addEventListener('click', () => showInlinePdf(false));
+  closePdfInlineBtn.addEventListener('click', () => collapseInlinePdf_());
 }
 
 
