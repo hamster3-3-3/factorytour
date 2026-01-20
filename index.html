@@ -65,6 +65,148 @@
 
     .processStepsPreviewWrap{display:none !important;}
     .processRefreshBtn{display:none !important;}
+  
+
+    /* PDF 全螢幕（不依賴 Fullscreen API） */
+    body.pdf-fs-lock { overflow: hidden; }
+
+    .pdfInlineWrap.is-fullscreen {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 9999 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      margin: 0 !important;
+      border-radius: 0 !important;
+      border-left: 0 !important;
+      border-right: 0 !important;
+      border-top: 0 !important;
+      border-bottom: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      background: #ffffff;
+    }
+
+    .pdfInlineWrap.is-fullscreen > .pdfFsDock {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pdfInlineWrap.is-fullscreen .pdfInlineRender {
+      max-height: none !important;
+      min-height: 0 !important;
+      height: auto !important;
+      flex: 1 1 auto !important;
+      overflow: auto !important;
+    }
+
+    .pdfInlineWrap.is-fullscreen .pdfHeaderBar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(248,250,252,0.96);
+      backdrop-filter: blur(6px);
+    }
+
+    /* 全螢幕模式：把原本 header 上的標註工具隱藏，改用左下角浮動工具列 */
+    .pdfInlineWrap.is-fullscreen .pdfAnnoToggle,
+    .pdfInlineWrap.is-fullscreen .pdfPenSizeBtn,
+    .pdfInlineWrap.is-fullscreen .pdfPenColorBtn,
+    .pdfInlineWrap.is-fullscreen .pdfAnnoEraser,
+    .pdfInlineWrap.is-fullscreen .pdfAnnoClear,
+    .pdfInlineWrap.is-fullscreen .pdfPenSettings {
+      display: none !important;
+    }
+
+    /* 右下角：關閉全螢幕（YouTube-like） */
+    .pdfFsCloseBtn {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      z-index: 40;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 46px;
+      height: 46px;
+      border-radius: 9999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(15,23,42,0.82);
+      color: #ffffff;
+      box-shadow: 0 12px 26px rgba(15,23,42,0.35);
+    }
+    .pdfFsCloseBtn:hover { background: rgba(15,23,42,0.92); }
+
+    /* 左下角：浮動工具列按鈕 */
+    .pdfFsToolFab {
+      position: absolute;
+      left: 16px;
+      bottom: 16px;
+      z-index: 40;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 50px;
+      height: 50px;
+      border-radius: 9999px;
+      border: 1px solid rgba(15,23,42,0.08);
+      background: rgba(255,255,255,0.92);
+      box-shadow: 0 12px 26px rgba(15,23,42,0.18);
+      color: #0f172a;
+    }
+
+    .pdfFsToolPanel {
+      position: absolute;
+      left: 16px;
+      bottom: 76px;
+      z-index: 41;
+      width: 260px;
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(15,23,42,0.10);
+      background: rgba(255,255,255,0.96);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 16px 34px rgba(15,23,42,0.18);
+    }
+
+    .pdfFsToolPanel .row { display: flex; align-items: center; gap: 8px; }
+    .pdfFsToolPanel .row + .row { margin-top: 10px; }
+    .pdfFsToolPanel .toolBtn {
+      flex: 1 1 auto;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      padding: 8px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .pdfFsToolPanel .toolBtn.is-active {
+      background: #0f172a;
+      color: #ffffff;
+      border-color: #0f172a;
+    }
+    .pdfFsToolPanel .miniBtn {
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      padding: 8px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+      white-space: nowrap;
+    }
+    .pdfFsToolPanel .label { font-size: 12px; font-weight: 700; color: #334155; }
+    .pdfFsToolPanel input[type="range"] { width: 140px; }
+    .pdfFsToolPanel .fsColorSwatch { width: 18px; height: 18px; border-radius: 9999px; border: 1px solid #cbd5e1; }
+    .pdfFsToolPanel .fsColorSwatch.is-active { outline: 2px solid #0f172a; outline-offset: 2px; }
+    .pdfFsToolPanel .fsColorPicker { height: 32px; width: 44px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; padding: 0; }
+
+
+
   </style>
 
   <script>
@@ -539,19 +681,60 @@
             <div class="processLoading mt-1 text-xs text-slate-500 hidden">載入中…</div>
         </label>
 
+        <!-- KPI（排關圖自動帶入） -->
+        <div class="md:col-span-12">
+          <div class="mt-3 rounded-2xl border bg-white p-3">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-12">
+              <label class="md:col-span-6">
+                <span class="text-xs font-semibold text-slate-600">預計產量(hr)</span>
+                <div class="mt-1 flex items-center gap-2">
+                  <input class="kpiPlannedOutputInput w-full rounded-xl border px-3 py-2 text-sm bg-slate-100 text-slate-700 focus:outline-none focus:ring" readonly aria-readonly="true" placeholder="—" autocomplete="off" />
+                  <span class="text-xs font-semibold text-slate-500 whitespace-nowrap">個/hr</span>
+                </div>
+              </label>
+
+              <label class="md:col-span-6">
+                <span class="text-xs font-semibold text-slate-600">人時生產性</span>
+                <div class="mt-1 flex items-center gap-2">
+                  <input class="kpiManHourInput w-full rounded-xl border px-3 py-2 text-sm bg-slate-100 text-slate-700 focus:outline-none focus:ring" readonly aria-readonly="true" placeholder="—" autocomplete="off" />
+                  <span class="text-xs font-semibold text-slate-500 whitespace-nowrap">個/時</span>
+                </div>
+              </label>
+
+              <label class="md:col-span-6">
+                <span class="text-xs font-semibold text-slate-600">包裝機台產能(hr)</span>
+                <div class="mt-1 flex items-center gap-2">
+                  <input class="kpiPackCapInput w-full rounded-xl border px-3 py-2 text-sm bg-slate-100 text-slate-700 focus:outline-none focus:ring" readonly aria-readonly="true" placeholder="—" autocomplete="off" />
+                  <span class="text-xs font-semibold text-slate-500 whitespace-nowrap">個/hr</span>
+                </div>
+              </label>
+
+
+
+              <label class="md:col-span-6">
+                <span class="text-xs font-semibold text-slate-600">包裝設備</span>
+                <input class="kpiPackEquipInput mt-1 w-full rounded-xl border px-3 py-2 text-sm bg-slate-100 text-slate-700 focus:outline-none focus:ring" readonly aria-readonly="true" placeholder="—" autocomplete="off" />
+              </label>
+
+              <div class="md:col-span-12">
+                <div class="kpiHint text-xs text-slate-500 mt-1 hidden"></div>
+              </div>
+            </div>
+          </div>
+        </div>
 
           </div>
         </div>
 
         
 <!-- 排關圖（內嵌顯示｜取代跳出視窗） -->
-<div class="pdfInlineWrap hidden mt-4 col-span-full md:col-span-12 md:col-start-1 w-full rounded-2xl border bg-white overflow-hidden">
-  <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b bg-slate-50">
+<div class="pdfInlineWrap hidden mt-4 col-span-full md:col-span-12 md:col-start-1 w-full rounded-2xl border bg-white overflow-hidden"><div class="pdfFsDock">
+  <div class="pdfHeaderBar flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b bg-slate-50">
     <div class="text-sm font-semibold text-slate-700">排關圖</div>
     <div class="flex flex-wrap items-center gap-2">
       <div class="inline-flex items-center overflow-hidden rounded-lg border bg-white">
         <button type="button" class="pdfZoomOut px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">－</button>
-        <button type="button" class="pdfFit border-x px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">適合寬度</button>
+        <button type="button" class="pdfFit border-x px-3 py-1.5 text-sm font-semibold hover:bg-slate-50" title="全螢幕">全螢幕</button>
         <button type="button" class="pdfZoomIn px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">＋</button>
       </div>
       <button type="button" class="pdfAnnoToggle pdfToolBtn rounded-lg border bg-white px-3 py-1.5 text-sm font-semibold hover:bg-slate-50">畫筆</button>
@@ -588,6 +771,7 @@
     </div>
   </div>
   <div class="pdfInlineRender w-full max-h-[82vh] min-h-[55vh] overflow-auto bg-slate-50"></div>
+</div>
 </div>
 
 <div class="md:col-span-12">
@@ -846,6 +1030,11 @@
             product: r.product || '',
             date: r.date || '',
             desc: r.desc || '',
+            plannedOutputHr: r.plannedOutputHr || '',
+            manHourProductivity: r.manHourProductivity || '',
+            packagingEquip: r.packagingEquip || '',
+            packagingCapacityHr: r.packagingCapacityHr || '',
+            _kpiLastKey: r._kpiLastKey || '',
             contentText: r.contentText || '',
             inkDataUrl: r.inkDataUrl || '',
             images: r.images || [],
@@ -880,6 +1069,11 @@
     // ---------------- 排關圖（PDF）管理 ----------------
     const pdfStore = new Map(); // key: normalized product name -> { displayName, fileName, blobUrl }
     let lastImportedPdfKey = '';
+
+    // ---------------- KPI（排關圖欄位）快取 ----------------
+    // key: normalizeKey(商品名) -> { plannedOutputHr, manHourProductivity, packagingEquip, packagingCapacityHr, source, updatedAt }
+    const kpiStore = new Map();
+
 
     function normalizeKey(s) {
       const t = (s || '').toString().trim();
@@ -1357,6 +1551,285 @@ async function extractProductNameFromPdf(arrayBuffer) {
   }
 }
 
+// ------------------------------
+// KPI extraction helpers (from schedule PDF / Excel)
+// ------------------------------
+function __cleanNumText_(s) {
+  return String(s ?? '').replace(/,/g, '').trim();
+}
+
+function __firstNumberText_(s) {
+  const t = String(s ?? '');
+  const m = t.match(/-?\d+(?:,\d{3})*(?:\.\d+)?/);
+  return m ? __cleanNumText_(m[0]) : '';
+}
+
+function __findLabelInLines_(lines, label) {
+  const lb = __normPdfStr_(label);
+  if (!lb) return null;
+  for (let li = 0; li < (lines || []).length; li++) {
+    const line = lines[li];
+    const toks = (line && line.tokens) ? line.tokens : [];
+    if (!toks.length) continue;
+    const tNorm = toks.map(t => __normPdfStr_(t.str));
+    const joined = tNorm.join('');
+    if (!joined.includes(lb)) continue;
+
+    // locate token span that contains label
+    let found = null;
+    for (let i = 0; i < tNorm.length; i++) {
+      let acc = '';
+      for (let j = i; j < Math.min(i + 12, tNorm.length); j++) {
+        acc += tNorm[j];
+        if (acc === lb || acc.includes(lb)) {
+          found = { i, j };
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (!found) continue;
+
+    const xs = toks.slice(found.i, found.j + 1).map(t => Number(t.x || 0));
+    const xMin = xs.length ? Math.min(...xs) : Number(toks[0].x || 0);
+    const xMax = xs.length ? Math.max(...xs) : Number(toks[toks.length - 1].x || 0);
+    const xCenter = (xMin + xMax) / 2;
+    return { lineIndex: li, xCenter, y: Number(line.y || 0) };
+  }
+  return null;
+}
+
+function __pickNearestTokenBelow_(items, anchor, predicate, opts = {}) {
+  if (!anchor || !items || !items.length) return null;
+  const yMaxGap = Number(opts.yMaxGap ?? 220);  // how far below we search
+  const xMaxGap = Number(opts.xMaxGap ?? 260);
+  const wX = Number(opts.wX ?? 0.22);          // x distance weight
+
+  const ax = Number(anchor.xCenter || 0);
+  const ay = Number(anchor.y || 0);
+
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const it of items) {
+    const x = Number(it.x || 0);
+    const y = Number(it.y || 0);
+    const dy = (ay - y);
+    if (!(dy > 0 && dy <= yMaxGap)) continue; // must be below
+    const dx = Math.abs(x - ax);
+    if (dx > xMaxGap) continue;
+    if (predicate && !predicate(it)) continue;
+
+    const score = dy + (dx * wX);
+    if (score < bestScore) {
+      bestScore = score;
+      best = it;
+    }
+  }
+  return best;
+}
+
+function __pickNearestTokenRight_(items, anchor, predicate, opts = {}) {
+  if (!anchor || !items || !items.length) return null;
+  const yTol = Number(opts.yTol ?? 10);
+  const xMaxGap = Number(opts.xMaxGap ?? 520);
+  const minDx = Number(opts.minDx ?? 8);
+  const ax = Number(anchor.xCenter || 0);
+  const ay = Number(anchor.y || 0);
+
+  let best = null;
+  let bestScore = Infinity;
+
+  for (const it of items) {
+    const x = Number(it.x || 0);
+    const y = Number(it.y || 0);
+    const dy = Math.abs(y - ay);
+    if (dy > yTol) continue;
+    const dx = x - ax;
+    if (dx <= minDx) continue;
+    if (dx > xMaxGap) continue;
+    if (predicate && !predicate(it)) continue;
+
+    // score prioritizes horizontal closeness, then vertical alignment
+    const score = dx + dy * 0.15;
+    if (score < bestScore) {
+      bestScore = score;
+      best = it;
+    }
+  }
+  return best;
+}
+
+function __toNum_(s) {
+  const n = parseFloat(__cleanNumText_(s));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function __isValidPlannedOut_(s) {
+  const n = __toNum_(s);
+  return Number.isFinite(n) && n >= 50;
+}
+
+function __isValidManHour_(s) {
+  const n = __toNum_(s);
+  return Number.isFinite(n) && n >= 10;
+}
+
+async function extractKpiFromPdf(arrayBuffer) {
+  const ok = await ensurePdfJsLoaded();
+  if (!ok || !window.pdfjsLib) return null;
+
+  try {
+    const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    const tc = await page.getTextContent();
+
+    const items = (tc.items || []).map(it => ({
+      str: (it.str || '').toString(),
+      x: (it.transform && it.transform[4]) ? Number(it.transform[4]) : 0,
+      y: (it.transform && it.transform[5]) ? Number(it.transform[5]) : 0
+    })).filter(it => it.str && it.str.trim());
+
+    const lines = groupTextItemsByLine_(items);
+
+    // Anchors (labels) — some tables place numeric values on the next line and in different columns.
+    const aPlanned = __findLabelInLines_(lines, '預計產量(1小時)') || __findLabelInLines_(lines, '預計產量');
+    const aManHour = __findLabelInLines_(lines, '人時生產性') || __findLabelInLines_(lines, '人時產能');
+    const aPackEq  = __findLabelInLines_(lines, '包裝設備');
+    const aPackCap = __findLabelInLines_(lines, '包裝機台產能(hr)') || __findLabelInLines_(lines, '包裝機台產能');
+
+    const isNumericTok = (it) => /\d/.test(String(it.str || ''));
+
+    // Planned output: prefer value to the right on the same row; fallback to nearest-right token; last resort nearest-below
+    let planned = '';
+    planned = __firstNumberText_(pickValueRightOfLabel_(lines, ['預計產量(1小時)', '預計產量'], 'text'));
+    if (!__isValidPlannedOut_(planned) && aPlanned) {
+      const tokR = __pickNearestTokenRight_(items, aPlanned, isNumericTok, { yTol: 12, xMaxGap: 560, minDx: 10 });
+      planned = tokR ? __firstNumberText_(tokR.str) : planned;
+    }
+    if (!__isValidPlannedOut_(planned) && aPlanned) {
+      const tokB = __pickNearestTokenBelow_(items, aPlanned, isNumericTok, { yMaxGap: 260, xMaxGap: 360, wX: 0.30 });
+      planned = tokB ? __firstNumberText_(tokB.str) : planned;
+    }
+    if (!__isValidPlannedOut_(planned)) planned = '';
+
+    // Man-hour productivity: prefer value to the right on the same row; fallback to nearest-right token; last resort nearest-below
+    let manHour = '';
+    manHour = __firstNumberText_(pickValueRightOfLabel_(lines, ['人時生產性', '人時產能'], 'text'));
+    if (!__isValidManHour_(manHour) && aManHour) {
+      const tokR = __pickNearestTokenRight_(items, aManHour, isNumericTok, { yTol: 12, xMaxGap: 560, minDx: 10 });
+      manHour = tokR ? __firstNumberText_(tokR.str) : manHour;
+    }
+    if (!__isValidManHour_(manHour) && aManHour) {
+      const tokB = __pickNearestTokenBelow_(items, aManHour, isNumericTok, { yMaxGap: 260, xMaxGap: 360, wX: 0.34 });
+      manHour = tokB ? __firstNumberText_(tokB.str) : manHour;
+    }
+    if (!__isValidManHour_(manHour)) manHour = '';
+
+    // Packaging equipment (text)
+    let packEq = '';
+    if (aPackEq) {
+      packEq = (pickValueRightOfLabel_(lines, ['包裝設備'], 'text') || '').trim();
+    } else {
+      packEq = (pickValueRightOfLabel_(lines, ['包裝設備'], 'text') || '').trim();
+    }
+
+    // Packaging machine capacity: right-of label, else nearest numeric below
+    let packCap = __firstNumberText_(pickValueRightOfLabel_(lines, ['包裝機台產能(hr)', '包裝機台產能'], 'text'));
+    if (!packCap && aPackCap) {
+      const tok = __pickNearestTokenBelow_(items, aPackCap, isNumericTok, { yMaxGap: 260, xMaxGap: 320, wX: 0.28 });
+      packCap = tok ? __firstNumberText_(tok.str) : '';
+    }
+
+    const out = {
+      plannedOutputHr: planned || '',
+      manHourProductivity: manHour || '',
+      packagingEquip: packEq || '',
+      packagingCapacityHr: packCap || ''
+    };
+
+    // If all empty, treat as not found
+    if (!out.plannedOutputHr && !out.manHourProductivity && !out.packagingEquip && !out.packagingCapacityHr) {
+      return null;
+    }
+
+    return out;
+  } catch (e) {
+    console.warn('extractKpiFromPdf failed', e);
+    return null;
+  }
+}
+
+async function extractKpiFromExcel(arrayBuffer) {
+  const ok = await ensureXlsxLoaded();
+  if (!ok || !window.XLSX) return null;
+
+  try {
+    const wb = window.XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetName = wb.SheetNames && wb.SheetNames.length ? wb.SheetNames[0] : null;
+    if (!sheetName) return null;
+    const ws = wb.Sheets[sheetName];
+    if (!ws) return null;
+
+    const aoa = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+
+    const norm = (s) => String(s ?? '')
+      .replace(/\s+/g, '')
+      .replace(/（/g, '(').replace(/）/g, ')')
+      .replace(/：/g, ':')
+      .trim();
+
+    const findRightValue = (labels) => {
+      const lbs = (labels || []).map(norm).filter(Boolean);
+      if (!lbs.length) return '';
+      for (const row of (aoa || [])) {
+        if (!Array.isArray(row)) continue;
+        for (let c = 0; c < row.length; c++) {
+          const cell = norm(row[c]);
+          if (!cell) continue;
+          const hit = lbs.some(lb => lb && cell.includes(lb));
+          if (!hit) continue;
+
+          for (let j = c + 1; j < Math.min(c + 10, row.length); j++) {
+            const v = String(row[j] ?? '').trim();
+            if (v) return v;
+          }
+        }
+      }
+      return '';
+    };
+
+    const productName = (findRightValue(['商品名稱', '品名']) || '').trim();
+    const plannedText = findRightValue(['預計產量(1小時)', '預計產量(1小時)', '預計產量']);
+    const manHourText = findRightValue(['人時生產性', '人時產能']);
+    const packEqText  = findRightValue(['包裝設備']);
+    const packCapText = findRightValue(['包裝機台產能(hr)', '包裝機台產能']);
+
+    const planned = __firstNumberText_(plannedText);
+    const manHour = __firstNumberText_(manHourText);
+    const packCap = __firstNumberText_(packCapText);
+
+    const out = {
+      productName: productName || '',
+      plannedOutputHr: planned || '',
+      manHourProductivity: manHour || '',
+      packagingEquip: (packEqText || '').trim(),
+      packagingCapacityHr: packCap || ''
+    };
+
+    if (!out.productName && !out.plannedOutputHr && !out.manHourProductivity && !out.packagingEquip && !out.packagingCapacityHr) {
+      return null;
+    }
+
+    return out;
+  } catch (e) {
+    console.warn('extractKpiFromExcel failed', e);
+    return null;
+  }
+}
+
+
 
 function pdfListText() {
       const names = Array.from(pdfStore.values()).map(v => v.displayName).filter(Boolean);
@@ -1398,6 +1871,17 @@ function pdfListText() {
             }
 
             pdfStore.set(key, { displayName, fileName: f.name, blobUrl, ab, source: 'local' });
+
+            // KPI cache (best effort)
+            try {
+              const kpi = await extractKpiFromPdf(ab);
+              if (kpi) {
+                kpiStore.set(key, { ...kpi, source: 'pdf', updatedAt: Date.now() });
+              }
+            } catch (e) {
+              console.warn('KPI extract (PDF) failed:', e);
+            }
+
             lastImportedPdfKey = key;
             importedPdf += 1;
             continue;
@@ -1415,6 +1899,22 @@ function pdfListText() {
             }
 
             pdfStore.set(key, { displayName, fileName: f.name, excelAb: ab, source: 'excel' });
+
+            // KPI cache (best effort)
+            try {
+              const kpi = await extractKpiFromExcel(ab);
+              if (kpi) {
+                // Store under file-derived key, and also under extracted productName key if present
+                kpiStore.set(key, { ...kpi, source: 'excel', updatedAt: Date.now() });
+                if (kpi.productName) {
+                  const k2 = normalizeKey(kpi.productName);
+                  if (k2 && k2 !== key) kpiStore.set(k2, { ...kpi, source: 'excel', updatedAt: Date.now() });
+                }
+              }
+            } catch (e) {
+              console.warn('KPI extract (Excel) failed:', e);
+            }
+
             lastImportedPdfKey = key;
             importedExcel += 1;
             continue;
@@ -1430,6 +1930,30 @@ function pdfListText() {
       try { refreshAllProcessStrips(); } catch (e) {}
       try { refreshAllKpiPanels(); } catch (e) {}
     }
+
+    function refreshAllProcessStrips() {
+      try {
+        const panels = document.querySelectorAll('#panels .panel');
+        panels.forEach(p => {
+          if (p && typeof p.__refreshProcessStrip === 'function') {
+            try { p.__refreshProcessStrip(); } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    }
+
+    function refreshAllKpiPanels() {
+      try {
+        const panels = document.querySelectorAll('#panels .panel');
+        panels.forEach(p => {
+          if (p && typeof p.__refreshKpiPanel === 'function') {
+            try { p.__refreshKpiPanel(true); } catch (e) {}
+          }
+        });
+      } catch (e) {}
+    }
+
+
 
     function findPdfForProductName(productName) {
       const name = (productName || '').toString().trim();
@@ -3678,7 +4202,24 @@ async function importSelectedFoldersFromDrive() {
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
 
-    function makeEmptyRecord() { return { type: '', name: '', notesText: '', desc: '', images: [] }; }
+    function makeEmptyRecord() {
+      return {
+        type: '',
+        name: '',
+        notesText: '',
+        desc: '',
+        images: [],
+
+        // KPI from 排關圖（可自動帶入，也可手動修正）
+        plannedOutputHr: '',        // 預計產量(hr)
+        manHourProductivity: '',    // 人時生產性
+        packagingEquip: '',         // 包裝設備
+        packagingCapacityHr: '',    // 包裝機台產能(hr)
+
+        // internal
+        _kpiLastKey: ''
+      };
+    }
 
     function displayName(rec, idx) {
       const name = rec && typeof rec.name === 'string' ? rec.name : '';
@@ -3894,6 +4435,13 @@ async function importSelectedFoldersFromDrive() {
 
         const typeInput   = $('.typeInput', panel);
         const nameInput   = $('.nameInput', panel);
+
+        const kpiPlannedOutputInput = panel.querySelector('.kpiPlannedOutputInput');
+        const kpiManHourInput       = panel.querySelector('.kpiManHourInput');
+        const kpiPackEquipInput     = panel.querySelector('.kpiPackEquipInput');
+        const kpiPackCapInput       = panel.querySelector('.kpiPackCapInput');
+        const kpiHint               = panel.querySelector('.kpiHint');
+
         const suggestBox  = panel.querySelector('.suggestBox');
         const descInput   = $('.descInput', panel);
         const processStepsWrap = panel.querySelector('.processStepsWrap');
@@ -3914,7 +4462,15 @@ const processPreviewWrap = panel.querySelector('.processStepsPreviewWrap');
         // Init values
         typeInput.value = rec.type || '';
         nameInput.value = rec.name || '';
+        try { setTimeout(() => { try { if (nameInput && nameInput.value) scheduleKpiRefresh(false); } catch (e) {} }, 0); } catch (e) {}
         descInput.value = rec.desc || '';
+
+        // KPI init
+        if (kpiPlannedOutputInput) kpiPlannedOutputInput.value = rec.plannedOutputHr || '';
+        if (kpiManHourInput)       kpiManHourInput.value       = rec.manHourProductivity || '';
+        if (kpiPackEquipInput)     kpiPackEquipInput.value     = rec.packagingEquip || '';
+        if (kpiPackCapInput)       kpiPackCapInput.value       = rec.packagingCapacityHr || '';
+
 
         // Panel title
         updatePanelTitle(panel, idx);
@@ -3940,8 +4496,113 @@ const processPreviewWrap = panel.querySelector('.processStepsPreviewWrap');
           updateTabLabel(idx);
           updatePanelTitle(panel, idx);
           hideSuggestBox(suggestBox);
+          try { scheduleKpiRefresh(true); } catch (e) {}
           
         };
+
+        // ---- KPI（排關圖自動帶入） ----
+        let __kpiReqId = 0;
+        let __kpiTimer = null;
+
+        const applyKpiToUI_ = (patch) => {
+          const r = state.records[idx] || {};
+          const vPlanned = (patch && patch.plannedOutputHr != null) ? patch.plannedOutputHr : (r.plannedOutputHr || '');
+          const vMan     = (patch && patch.manHourProductivity != null) ? patch.manHourProductivity : (r.manHourProductivity || '');
+          const vEq      = (patch && patch.packagingEquip != null) ? patch.packagingEquip : (r.packagingEquip || '');
+          const vCap     = (patch && patch.packagingCapacityHr != null) ? patch.packagingCapacityHr : (r.packagingCapacityHr || '');
+
+          if (kpiPlannedOutputInput) kpiPlannedOutputInput.value = vPlanned;
+          if (kpiManHourInput)       kpiManHourInput.value       = vMan;
+          if (kpiPackEquipInput)     kpiPackEquipInput.value     = vEq;
+          if (kpiPackCapInput)       kpiPackCapInput.value       = vCap;
+        };
+
+        const setKpiHint_ = (msg) => {
+          if (!kpiHint) return;
+          if (msg) {
+            kpiHint.textContent = String(msg);
+            kpiHint.classList.remove('hidden');
+          } else {
+            kpiHint.textContent = '';
+            kpiHint.classList.add('hidden');
+          }
+        };
+
+        const clearKpiHint_ = () => setKpiHint_('');
+
+        const refreshKpiPanel = async (force) => {
+          const myId = ++__kpiReqId;
+          const nameNow = (nameInput && nameInput.value) ? String(nameInput.value).trim() : '';
+          if (!nameNow) {
+            clearKpiHint_();
+            return;
+          }
+
+          const key = normalizeKey(nameNow);
+          // KPI hint: only show on failure
+          clearKpiHint_();
+
+          let kpi = key ? kpiStore.get(key) : null;
+
+          if (!kpi) {
+            const pdfItem = findPdfForProductName(nameNow);
+            try {
+              if (pdfItem) {
+                if (pdfItem.source === 'excel' && pdfItem.excelAb) {
+                  kpi = await extractKpiFromExcel(pdfItem.excelAb);
+                } else if (pdfItem.ab) {
+                  kpi = await extractKpiFromPdf(pdfItem.ab);
+                }
+                if (kpi && key) {
+                  kpiStore.set(key, { ...kpi, source: (pdfItem.source || 'local'), updatedAt: Date.now() });
+                }
+              }
+            } catch (e) {
+              console.warn('refreshKpiPanel failed:', e);
+            }
+          }
+
+          if (myId != __kpiReqId) return;
+
+          if (!kpi) {
+            setKpiHint_('未找到對應排關圖 KPI（請確認已匯入 PDF/Excel，且商品名相符）');
+            return;
+          }
+
+          const recNow = state.records[idx] || {};
+          const lastKey = recNow._kpiLastKey || '';
+          const nameChanged = (lastKey && lastKey !== key);
+          const overwriteAll = !!force || !lastKey || nameChanged;
+
+          const patch = { _kpiLastKey: key };
+          if (overwriteAll || !recNow.plannedOutputHr)     patch.plannedOutputHr     = (kpi.plannedOutputHr || '');
+          if (overwriteAll || !recNow.manHourProductivity) patch.manHourProductivity = (kpi.manHourProductivity || '');
+          if (overwriteAll || !recNow.packagingEquip)      patch.packagingEquip      = (kpi.packagingEquip || '');
+          if (overwriteAll || !recNow.packagingCapacityHr) patch.packagingCapacityHr = (kpi.packagingCapacityHr || '');
+
+          setRecord(patch);
+          applyKpiToUI_(patch);
+
+          // 成功帶入時不顯示訊息
+          clearKpiHint_();
+        };
+
+        const scheduleKpiRefresh = (force) => {
+          if (__kpiTimer) clearTimeout(__kpiTimer);
+          __kpiTimer = setTimeout(() => refreshKpiPanel(!!force), 350);
+        };
+
+        // expose for global refresh after 匯入排關圖
+        panel.__refreshKpiPanel = (force) => refreshKpiPanel(!!force);
+
+        // KPI manual edit -> update record (does not auto-overwrite unless name changes)
+        // KPI 欄位為唯讀：不允許手動編輯
+        // if (kpiPlannedOutputInput) kpiPlannedOutputInput.addEventListener('input', (e) => setRecord({ plannedOutputHr: (e.target.value || '') }));
+        // if (kpiManHourInput)       kpiManHourInput.addEventListener('input', (e) => setRecord({ manHourProductivity: (e.target.value || '') }));
+        // if (kpiPackEquipInput)     kpiPackEquipInput.addEventListener('input', (e) => setRecord({ packagingEquip: (e.target.value || '') }));
+        // if (kpiPackCapInput)       kpiPackCapInput.addEventListener('input', (e) => setRecord({ packagingCapacityHr: (e.target.value || '') }));
+
+
 
         
 // ---- 作業工程（從排關圖擷取 -> 可編輯表格） ----
@@ -4403,6 +5064,7 @@ if (processRefreshBtn) {
 
           const hits = suggestProductNames(v, 8);
           renderSuggestBox(suggestBox, hits, applyPickedName);
+          try { scheduleKpiRefresh(false); } catch (e) {}
           
         });
 
@@ -4496,6 +5158,11 @@ function updatePdfInlineControls_() {
   if (pdfAnnoClearBtn) {
     pdfAnnoClearBtn.classList.toggle('btn-disabled', !rec.pdfAnnoMode);
   }
+
+  // Sync fullscreen floating toolbar (if exists)
+  try {
+    if (pdfInlineWrap && pdfInlineWrap._fsUi && typeof pdfInlineWrap._fsUi.sync === 'function') pdfInlineWrap._fsUi.sync();
+  } catch (_) {}
 }
 
 function showInlinePdf(show) {
@@ -4558,16 +5225,23 @@ async function refreshInlinePdfPreview() {
   }
 }
 
-// ---- iPad two-finger pinch zoom (avoid triggering ink) ----
+// ---- iPad two-finger pinch zoom + two-finger pan (avoid triggering ink) ----
 function attachPinchZoomToInlinePdf_() {
   if (!pdfInlineRender) return;
   if (pdfInlineRender.__pinchBound) return;
   pdfInlineRender.__pinchBound = true;
 
-  let pinching = false;
+  let gesturing = false;
   let startDist = 0;
   let startZoom = 1;
   let lastZoom = 1;
+
+  // Two-finger pan baseline
+  let startMidX = 0;
+  let startMidY = 0;
+  let startScrollLeft = 0;
+  let startScrollTop = 0;
+
   let commitTimer = null;
 
   const clampZoom_ = (z) => {
@@ -4581,6 +5255,11 @@ function attachPinchZoomToInlinePdf_() {
     const dy = (t2.clientY - t1.clientY);
     return Math.sqrt(dx*dx + dy*dy);
   };
+
+  const mid_ = (t1, t2) => ({
+    x: (t1.clientX + t2.clientX) / 2,
+    y: (t1.clientY + t2.clientY) / 2
+  });
 
   const pagesWrap_ = () => (pdfInlineRender._pagesWrap || pdfInlineRender);
 
@@ -4613,45 +5292,67 @@ function attachPinchZoomToInlinePdf_() {
 
   pdfInlineRender.addEventListener('touchstart', (e) => {
     if (!e.touches || e.touches.length !== 2) return;
-    // Start pinch
+
+    // Start gesture (pinch + pan)
     ensurePdfPrefs_();
     const rec = state.records[idx];
-    pinching = true;
+    gesturing = true;
     pdfInlineRender._pinching = true;
 
     startDist = dist_(e.touches[0], e.touches[1]);
     startZoom = clampZoom_(rec.pdfZoomFactor || 1);
     lastZoom = startZoom;
 
-    // Temporarily disable ink while pinching (avoid lines from second finger)
+    const m = mid_(e.touches[0], e.touches[1]);
+    startMidX = m.x;
+    startMidY = m.y;
+    startScrollLeft = pdfInlineRender.scrollLeft;
+    startScrollTop = pdfInlineRender.scrollTop;
+
+    // Temporarily disable ink while 2-finger gesturing
     disableInk_(true);
 
-    // Prevent page scroll while pinching inside the viewer
+    // Prevent page scroll while gesturing inside the viewer
     e.preventDefault();
   }, { passive: false, capture: true });
 
   pdfInlineRender.addEventListener('touchmove', (e) => {
-    if (!pinching) return;
+    if (!gesturing) return;
     if (!e.touches || e.touches.length < 2) return;
+
+    // --- Pan (two-finger drag) ---
+    const m = mid_(e.touches[0], e.touches[1]);
+    const dx = (m.x - startMidX);
+    const dy = (m.y - startMidY);
+
+    // Natural "grab to move" feel:
+    // - fingers move down  => view moves down (scrollTop decreases)
+    // - fingers move right => view moves right (scrollLeft decreases)
+    try {
+      pdfInlineRender.scrollLeft = startScrollLeft - dx;
+      pdfInlineRender.scrollTop  = startScrollTop  - dy;
+    } catch (_) {}
+
+    // --- Pinch (zoom) ---
     const d = dist_(e.touches[0], e.touches[1]);
-    if (!startDist || startDist <= 0) return;
+    if (startDist && startDist > 0) {
+      const ratio = d / startDist;
+      lastZoom = clampZoom_(startZoom * ratio);
 
-    const ratio = d / startDist;
-    lastZoom = clampZoom_(startZoom * ratio);
-
-    // Preview scale relative to the current rendered zoom
-    const previewRatio = startZoom ? (lastZoom / startZoom) : 1;
-    setPreviewScale_(previewRatio);
+      // Preview scale relative to the current rendered zoom
+      const previewRatio = startZoom ? (lastZoom / startZoom) : 1;
+      setPreviewScale_(previewRatio);
+    }
 
     e.preventDefault();
   }, { passive: false, capture: true });
 
   const end_ = (e) => {
-    if (!pinching) return;
-    // When remaining touches are < 2, end pinch
+    if (!gesturing) return;
+    // When remaining touches are < 2, end gesture
     if (e.touches && e.touches.length >= 2) return;
 
-    pinching = false;
+    gesturing = false;
     pdfInlineRender._pinching = false;
 
     clearPreviewScale_();
@@ -4659,13 +5360,16 @@ function attachPinchZoomToInlinePdf_() {
 
     ensurePdfPrefs_();
     const rec = state.records[idx];
-    rec.pdfZoomFactor = clampZoom_(lastZoom);
+    const nextZoom = clampZoom_(lastZoom);
 
-    // Commit: re-render once after pinch ends
+    // Only commit (re-render) when zoom changed meaningfully.
+    const zoomChanged = Math.abs(nextZoom - startZoom) > 0.02;
+    if (zoomChanged) rec.pdfZoomFactor = nextZoom;
+
     if (commitTimer) clearTimeout(commitTimer);
     commitTimer = setTimeout(async () => {
       try {
-        if (pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) {
+        if (zoomChanged && pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) {
           await refreshInlinePdfPreview();
         }
       } catch (_) {}
@@ -4679,6 +5383,281 @@ function attachPinchZoomToInlinePdf_() {
 }
 
 attachPinchZoomToInlinePdf_();
+
+/* ---- PDF Fullscreen (overlay) & Floating Toolbar ---- */
+function ensurePdfFullscreenUi_() {
+  if (!pdfInlineWrap) return;
+  if (pdfInlineWrap._fsUi) return;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'pdfFsCloseBtn hidden';
+  closeBtn.setAttribute('aria-label', '關閉全螢幕');
+  closeBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 3H5a2 2 0 0 0-2 2v4" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      <path d="M15 3h4a2 2 0 0 1 2 2v4" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      <path d="M9 21H5a2 2 0 0 1-2-2v-4" stroke="white" stroke-width="2" stroke-linecap="round"/>
+      <path d="M15 21h4a2 2 0 0 0 2-2v-4" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+
+  const fabBtn = document.createElement('button');
+  fabBtn.type = 'button';
+  fabBtn.className = 'pdfFsToolFab hidden';
+  fabBtn.setAttribute('aria-label', '工具列');
+  fabBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 20l4-1 9-9-3-3-9 9-1 4z" stroke="#0f172a" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M13 6l3 3" stroke="#0f172a" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+
+  const panel = document.createElement('div');
+  panel.className = 'pdfFsToolPanel hidden';
+  panel.innerHTML = `
+    <div class="row">
+      <button type="button" class="toolBtn fsPenBtn">畫筆</button>
+      <button type="button" class="toolBtn fsEraserBtn">橡皮擦</button>
+    </div>
+    <div class="row">
+      <span class="label">粗細</span>
+      <input type="range" min="1" max="12" step="1" class="fsSizeRange" />
+      <span class="label fsSizeValue" style="width:24px;text-align:right;">3</span>
+    </div>
+    <div class="row">
+      <span class="label">顏色</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button type="button" class="fsColorSwatch" data-color="#f97316" style="background:#f97316"></button>
+        <button type="button" class="fsColorSwatch" data-color="#ef4444" style="background:#ef4444"></button>
+        <button type="button" class="fsColorSwatch" data-color="#3b82f6" style="background:#3b82f6"></button>
+        <button type="button" class="fsColorSwatch" data-color="#22c55e" style="background:#22c55e"></button>
+        <button type="button" class="fsColorSwatch" data-color="#111827" style="background:#111827"></button>
+      </div>
+      <input type="color" class="fsColorPicker" />
+      <span class="fsColorValue" style="font-size:12px;font-weight:700;color:#64748b;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">#f97316</span>
+    </div>
+    <div class="row">
+      <button type="button" class="miniBtn fsFitBtn">適合寬度</button>
+      <button type="button" class="miniBtn fsClearBtn">清除標註</button>
+      <button type="button" class="miniBtn fsClosePanelBtn" style="margin-left:auto;">收合</button>
+    </div>
+  `;
+
+  // Attach to dock (so absolute positioning works in fullscreen)
+  const dock = pdfInlineWrap.querySelector('.pdfFsDock') || pdfInlineWrap;
+  dock.appendChild(closeBtn);
+  dock.appendChild(fabBtn);
+  dock.appendChild(panel);
+
+  const penBtn = panel.querySelector('.fsPenBtn');
+  const eraserBtn = panel.querySelector('.fsEraserBtn');
+  const sizeRange = panel.querySelector('.fsSizeRange');
+  const sizeValue = panel.querySelector('.fsSizeValue');
+  const colorPicker = panel.querySelector('.fsColorPicker');
+  const colorValue = panel.querySelector('.fsColorValue');
+  const colorSwatches = panel.querySelectorAll('.fsColorSwatch');
+  const fitBtn = panel.querySelector('.fsFitBtn');
+  const clearBtn = panel.querySelector('.fsClearBtn');
+  const closePanelBtn = panel.querySelector('.fsClosePanelBtn');
+
+  const sync = () => {
+    try {
+      ensurePdfPrefs_();
+      const rec = state.records[idx] || {};
+      const penActive = !!rec.pdfAnnoMode && rec.pdfAnnoTool === 'pen';
+      const eraserActive = !!rec.pdfAnnoMode && rec.pdfAnnoTool === 'eraser';
+      if (penBtn) penBtn.classList.toggle('is-active', penActive);
+      if (eraserBtn) eraserBtn.classList.toggle('is-active', eraserActive);
+
+      const w = Number(rec.pdfAnnoPenWidth || 3);
+      if (sizeRange) sizeRange.value = String(w);
+      if (sizeValue) sizeValue.textContent = String(w);
+
+      const col = String(rec.pdfAnnoPenColor || '#f97316');
+      if (colorPicker) colorPicker.value = col;
+      if (colorValue) colorValue.textContent = col.toLowerCase();
+      if (colorSwatches && colorSwatches.length) {
+        colorSwatches.forEach((btn) => {
+          const c = (btn.getAttribute('data-color') || '').toLowerCase();
+          btn.classList.toggle('is-active', c && c === col.toLowerCase());
+        });
+      }
+    } catch (_) {}
+  };
+
+  closeBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exitPdfFullscreen_(); });
+
+  fabBtn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    panel.classList.toggle('hidden');
+    sync();
+  });
+
+  if (closePanelBtn) {
+    closePanelBtn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      panel.classList.add('hidden');
+    });
+  }
+
+  if (penBtn) {
+    penBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try { if (pdfAnnoToggleBtn) pdfAnnoToggleBtn.click(); } catch (_) {}
+      sync();
+    });
+  }
+
+  if (eraserBtn) {
+    eraserBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try { if (pdfAnnoEraserBtn) pdfAnnoEraserBtn.click(); } catch (_) {}
+      sync();
+    });
+  }
+
+  if (sizeRange) {
+    const onSize = (e) => {
+      try {
+        applyPenWidth_(e.target.value);
+        sync();
+      } catch (_) {}
+    };
+    sizeRange.addEventListener('input', onSize);
+    sizeRange.addEventListener('change', onSize);
+  }
+
+  if (colorPicker) {
+    const onCol = (e) => {
+      try { applyPenColor_(e.target.value); } catch (_) {}
+      sync();
+    };
+    colorPicker.addEventListener('input', onCol);
+    colorPicker.addEventListener('change', onCol);
+  }
+
+  if (colorSwatches && colorSwatches.length) {
+    colorSwatches.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const c = btn.getAttribute('data-color');
+        if (c) { try { applyPenColor_(c); } catch (_) {} }
+        sync();
+      });
+    });
+  }
+
+  if (fitBtn) {
+    fitBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      await fitPdfWidth_();
+      sync();
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try { if (pdfAnnoClearBtn) pdfAnnoClearBtn.click(); } catch (_) {}
+      sync();
+    });
+  }
+
+  pdfInlineWrap._fsUi = { closeBtn, fabBtn, panel, sync };
+}
+
+async function fitPdfWidth_() {
+  ensurePdfPrefs_();
+  const rec = state.records[idx];
+  rec.pdfZoomFactor = 1.0;
+  if (pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) await refreshInlinePdfPreview();
+}
+
+function enterPdfFullscreen_() {
+  if (!pdfInlineWrap) return;
+  if (pdfInlineWrap.classList.contains('is-fullscreen')) return;
+
+  ensurePdfFullscreenUi_();
+
+  // Save original placement
+  const place = pdfInlineWrap._fsPlace || (pdfInlineWrap._fsPlace = {});
+  if (!place.placeholder) {
+    const ph = document.createElement('div');
+    ph.className = 'pdfFsPlaceholder';
+    ph.style.display = 'none';
+    place.placeholder = ph;
+  }
+
+  try {
+    place.parent = pdfInlineWrap.parentNode;
+    // Insert placeholder at current position
+    if (place.parent) place.parent.insertBefore(place.placeholder, pdfInlineWrap);
+  } catch (_) {}
+
+  // Move viewer to body
+  try { document.body.appendChild(pdfInlineWrap); } catch (_) {}
+  document.body.classList.add('pdf-fs-lock');
+  pdfInlineWrap.classList.add('is-fullscreen');
+
+  // Show floating UI
+  const ui = pdfInlineWrap._fsUi;
+  if (ui) {
+    ui.closeBtn.classList.remove('hidden');
+    ui.fabBtn.classList.remove('hidden');
+    ui.panel.classList.add('hidden');
+    try { ui.sync(); } catch (_) {}
+  }
+
+  // ESC to close
+  if (!pdfInlineWrap._fsKeyHandler) {
+    pdfInlineWrap._fsKeyHandler = (e) => {
+      if (e && (e.key === 'Escape' || e.key === 'Esc')) exitPdfFullscreen_();
+    };
+    document.addEventListener('keydown', pdfInlineWrap._fsKeyHandler);
+  }
+
+  // Re-render once to fit new viewport
+  setTimeout(() => {
+    try { if (pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) refreshInlinePdfPreview(); } catch (_) {}
+  }, 60);
+}
+
+function exitPdfFullscreen_() {
+  if (!pdfInlineWrap) return;
+  if (!pdfInlineWrap.classList.contains('is-fullscreen')) return;
+
+  pdfInlineWrap.classList.remove('is-fullscreen');
+  document.body.classList.remove('pdf-fs-lock');
+
+  const place = pdfInlineWrap._fsPlace || {};
+  try {
+    const ph = place.placeholder;
+    if (ph && ph.parentNode) {
+      ph.parentNode.replaceChild(pdfInlineWrap, ph);
+    } else if (place.parent) {
+      place.parent.appendChild(pdfInlineWrap);
+    }
+  } catch (_) {
+    // noop
+  }
+
+  const ui = pdfInlineWrap._fsUi;
+  if (ui) {
+    ui.closeBtn.classList.add('hidden');
+    ui.fabBtn.classList.add('hidden');
+    ui.panel.classList.add('hidden');
+  }
+
+  if (pdfInlineWrap._fsKeyHandler) {
+    try { document.removeEventListener('keydown', pdfInlineWrap._fsKeyHandler); } catch (_) {}
+    pdfInlineWrap._fsKeyHandler = null;
+  }
+
+  // Re-render once to fit back
+  setTimeout(() => {
+    try { if (pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) refreshInlinePdfPreview(); } catch (_) {}
+  }, 80);
+}
+
 
 
 if (showPdfBtn) {
@@ -4852,11 +5831,21 @@ if (pdfZoomOutBtn) {
 }
 
 if (pdfFitBtn) {
-  pdfFitBtn.addEventListener('click', async () => {
-    ensurePdfPrefs_();
-    const rec = state.records[idx];
-    rec.pdfZoomFactor = 1.0;
-    if (pdfInlineWrap && !pdfInlineWrap.classList.contains('hidden')) await refreshInlinePdfPreview();
+  pdfFitBtn.addEventListener('click', async (e) => {
+    try { e && e.preventDefault && e.preventDefault(); } catch (_) {}
+    // Make sure viewer is visible before fullscreen
+    const wasHidden = (pdfInlineWrap && pdfInlineWrap.classList.contains('hidden'));
+    if (wasHidden) {
+      showInlinePdf(true);
+      await refreshInlinePdfPreview();
+    }
+
+    // Toggle fullscreen
+    if (pdfInlineWrap && pdfInlineWrap.classList.contains('is-fullscreen')) {
+      exitPdfFullscreen_();
+    } else {
+      enterPdfFullscreen_();
+    }
   });
 }
 
