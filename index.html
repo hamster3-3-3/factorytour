@@ -581,6 +581,7 @@
         <h1 class="text-lg font-bold truncate">訪廠問題表格</h1>
       </div>
       <div class="flex flex-wrap items-center gap-2 justify-end">
+        <button id="clearFormBtnHeader" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100">清空表單</button>
         <button id="importPdfBtnHeader" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">匯入排關圖(離線用)</button>
         <button id="openDriveFolderBtn" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">開啟雲端</button>
         <button id="driveImportBtn" class="rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-slate-50">從雲端匯入</button>
@@ -858,15 +859,20 @@
     const PDF_CACHE_DB = 'visit_factory_pdf_cache_v1';
     const PDF_CACHE_STORE = 'pdfs';
     const DRIVE_IMPORTED_KEY = 'visit_drive_imported_pdfs_v1'; // 存已匯入的雲端PDF清單（供重整後復原）
+    const CURRENT_IMPORTED_KEY = 'visit_current_imported_pdfs_v1'; // 本次匯入的排關圖清單（本機/雲端共用；A模式：每次匯入覆蓋）
+    const ANNO_CACHE_STORE = 'annos'; // 排關圖畫筆/標註快取（IndexedDB）
 
     function idbOpen_() {
       return new Promise((resolve, reject) => {
         try {
-          const req = indexedDB.open(PDF_CACHE_DB, 1);
+          const req = indexedDB.open(PDF_CACHE_DB, 2);
           req.onupgradeneeded = () => {
             const db = req.result;
             if (!db.objectStoreNames.contains(PDF_CACHE_STORE)) {
               db.createObjectStore(PDF_CACHE_STORE, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(ANNO_CACHE_STORE)) {
+              db.createObjectStore(ANNO_CACHE_STORE, { keyPath: 'id' });
             }
           };
           req.onsuccess = () => resolve(req.result);
@@ -923,6 +929,172 @@
         return null;
       }
     }
+
+    
+    // List all cached PDFs (metadata only) from IndexedDB.
+    // Used as a fallback restore path when localStorage is unavailable / cleared (common on iOS memory reclaim).
+    async function cacheListAllPdfs_() {
+      if (!('indexedDB' in window)) return [];
+      try {
+        const db = await idbOpen_();
+        const tx = db.transaction(PDF_CACHE_STORE, 'readonly');
+        const store = tx.objectStore(PDF_CACHE_STORE);
+        const out = [];
+        await new Promise((res, rej) => {
+          const req = store.openCursor();
+          req.onsuccess = (ev) => {
+            const cur = ev.target.result;
+            if (cur) {
+              const v = cur.value || {};
+              out.push({
+                id: String(v.id || cur.key || ''),
+                meta: v.meta || {},
+                sizeBytes: Number(v.sizeBytes || 0),
+                savedAt: Number(v.savedAt || 0)
+              });
+              cur.continue();
+            } else {
+              res(true);
+            }
+          };
+          req.onerror = () => rej(req.error || new Error('cursor error'));
+        });
+        await new Promise((res, rej) => {
+          tx.oncomplete = () => res(true);
+          tx.onerror = () => rej(tx.error || new Error('tx error'));
+          tx.onabort = () => rej(tx.error || new Error('tx abort'));
+        });
+        try { db.close(); } catch (e) {}
+        return out;
+      } catch (e) {
+        console.warn('cacheListAllPdfs_ failed:', e);
+        return [];
+      }
+    }
+
+    // Fallback hydration: if imported-list in localStorage is missing, try rebuild pdfStore from cached PDFs.
+    async function hydratePdfStoreFromCacheIndex_() {
+      try {
+        if (pdfStore && pdfStore.size) return false;
+        const rows = await cacheListAllPdfs_();
+        if (!rows || !rows.length) return false;
+
+        let added = 0;
+        for (const row of rows) {
+          const meta = row.meta || {};
+          const name = (meta.name != null) ? String(meta.name).trim() : '';
+          if (!name) continue;
+
+          const key = normalizeKey(name);
+          if (!key) continue;
+          if (pdfStore.has(key)) continue;
+
+          const fileName = (meta.fileName != null) ? String(meta.fileName) : (name.endsWith('.pdf') ? name : (name + '.pdf'));
+          const pdfItem = {
+            displayName: name,
+            id: String(row.id),
+            fileName: fileName,
+            blobUrl: '',      // on-demand
+            openUrl: '',
+            sizeBytes: Number(meta.sizeBytes || row.sizeBytes || 0),
+            updatedAt: String(meta.updatedAt || ''),
+            source: 'cache'
+          };
+          pdfStore.set(key, pdfItem);
+          try { upsertCurrentImported_(pdfItem); } catch (e) {}
+          added++;
+        }
+
+        if (added && !lastImportedPdfKey) {
+          try { lastImportedPdfKey = Array.from(pdfStore.keys())[0] || ''; } catch (e) {}
+        }
+        return added > 0;
+      } catch (e) {
+        console.warn('hydratePdfStoreFromCacheIndex_ failed:', e);
+        return false;
+      }
+    }
+
+async function cacheClearAllPdfs_() {
+      if (!('indexedDB' in window)) return;
+      try {
+        const db = await idbOpen_();
+        const tx = db.transaction(PDF_CACHE_STORE, 'readwrite');
+        const store = tx.objectStore(PDF_CACHE_STORE);
+        store.clear();
+        await new Promise((res, rej) => {
+          tx.oncomplete = () => res(true);
+          tx.onerror = () => rej(tx.error || new Error('tx error'));
+          tx.onabort = () => rej(tx.error || new Error('tx abort'));
+        });
+        try { db.close(); } catch (e) {}
+      } catch (e) {
+        console.warn('cacheClearAllPdfs_ failed:', e);
+      }
+    }
+
+    async function cachePutAnno_(id, annoStore) {
+      if (!id) return;
+      if (!('indexedDB' in window)) return;
+      try {
+        const db = await idbOpen_();
+        const tx = db.transaction(ANNO_CACHE_STORE, 'readwrite');
+        const store = tx.objectStore(ANNO_CACHE_STORE);
+        store.put({
+          id: String(id),
+          store: annoStore || {},
+          savedAt: Date.now()
+        });
+        await new Promise((res, rej) => {
+          tx.oncomplete = () => res(true);
+          tx.onerror = () => rej(tx.error || new Error('tx error'));
+          tx.onabort = () => rej(tx.error || new Error('tx abort'));
+        });
+        try { db.close(); } catch (e) {}
+      } catch (e) {
+        console.warn('cachePutAnno_ failed:', e);
+      }
+    }
+
+    async function cacheGetAnno_(id) {
+      if (!id) return null;
+      if (!('indexedDB' in window)) return null;
+      try {
+        const db = await idbOpen_();
+        const tx = db.transaction(ANNO_CACHE_STORE, 'readonly');
+        const store = tx.objectStore(ANNO_CACHE_STORE);
+        const row = await new Promise((res, rej) => {
+          const req = store.get(String(id));
+          req.onsuccess = () => res(req.result || null);
+          req.onerror = () => rej(req.error || new Error('get error'));
+        });
+        try { db.close(); } catch (e) {}
+        if (!row) return null;
+        return { store: row.store || {}, savedAt: row.savedAt || 0 };
+      } catch (e) {
+        console.warn('cacheGetAnno_ failed:', e);
+        return null;
+      }
+    }
+
+    async function cacheClearAllAnnos_() {
+      if (!('indexedDB' in window)) return;
+      try {
+        const db = await idbOpen_();
+        const tx = db.transaction(ANNO_CACHE_STORE, 'readwrite');
+        const store = tx.objectStore(ANNO_CACHE_STORE);
+        store.clear();
+        await new Promise((res, rej) => {
+          tx.oncomplete = () => res(true);
+          tx.onerror = () => rej(tx.error || new Error('tx error'));
+          tx.onabort = () => rej(tx.error || new Error('tx abort'));
+        });
+        try { db.close(); } catch (e) {}
+      } catch (e) {
+        console.warn('cacheClearAllAnnos_ failed:', e);
+      }
+    }
+
 
     // ---------------- Excel -> PDF 離線快取（IndexedDB） ----------------
     // 目的：同一份 Excel 排關圖重複點選『顯示排關圖』時，不必每次都重新轉檔。
@@ -1025,35 +1197,153 @@
       }
     }
 
-
-    function saveState() {
+    // ---------------- 本次匯入清單（A 模式：每次匯入覆蓋） ----------------
+    function loadCurrentImportedList_() {
       try {
-        // 只保存可序列化的表單資料；PDF Blob URL/物件不寫入 storage
+        const raw = localStorage.getItem(CURRENT_IMPORTED_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function saveCurrentImportedList_(arr) {
+      try { localStorage.setItem(CURRENT_IMPORTED_KEY, JSON.stringify(arr || [])); } catch (e) {}
+    }
+    function clearCurrentImportedList_() {
+      try { localStorage.removeItem(CURRENT_IMPORTED_KEY); } catch (e) {}
+    }
+
+    function upsertCurrentImported_(pdfItem) {
+      if (!pdfItem) return;
+      const productName = (pdfItem.displayName || guessNameFromFilename(pdfItem.fileName || '') || '').trim();
+      const key = normalizeKey(productName);
+      if (!key) return;
+
+      const list = loadCurrentImportedList_();
+      const id = String(pdfItem.id || '');
+      const source = String(pdfItem.source || '');
+      const fileName = pdfItem.fileName || (productName ? (productName + '.pdf') : '');
+      const sizeBytes = Number(pdfItem.sizeBytes || 0);
+      const updatedAt = pdfItem.updatedAt || '';
+
+      const entry = { key, id, source, displayName: productName, fileName, sizeBytes, updatedAt, driveKind: pdfItem.driveKind || '' };
+
+      const idx = list.findIndex(x => x && x.key === key);
+      if (idx >= 0) list[idx] = entry;
+      else list.push(entry);
+      saveCurrentImportedList_(list);
+    }
+
+    function resetImportContext_() {
+      // A 模式：每次匯入覆蓋「本次匯入」資料來源，避免商品名混入舊工廠。
+      try { pdfStore.clear(); } catch (e) {}
+      lastImportedPdfKey = '';
+      try { kpiStore.clear(); } catch (e) {}
+      clearCurrentImportedList_();
+      // 也清掉舊版 Drive-only 清單，避免混用
+      try { localStorage.removeItem(DRIVE_IMPORTED_KEY); } catch (e) {}
+      try { clearInlinePdf(); } catch (e) {}
+      try { closePdfModal(); } catch (e) {}
+    }
+
+    function hydratePdfStoreFromImportedList_() {
+      try {
+        let arr = loadCurrentImportedList_();
+        // Backward-compat: 若新版清單沒有但舊版 Drive-only 有，則遷移一次
+        if ((!arr || !arr.length)) {
+          const old = loadDriveImportedList_();
+          if (old && old.length) {
+            arr = old.map(it => ({
+              key: normalizeKey(it.displayName || guessNameFromFilename(it.fileName || '') || ''),
+              id: String(it.id || ''),
+              source: 'drive',
+              displayName: it.displayName || guessNameFromFilename(it.fileName || ''),
+              fileName: it.fileName || '',
+              sizeBytes: Number(it.sizeBytes || 0),
+              updatedAt: it.updatedAt || '',
+              driveKind: it.driveKind || ''
+            })).filter(x => x.key);
+            saveCurrentImportedList_(arr);
+          }
+        }
+        if (!arr || !arr.length) return;
+
+        arr.forEach(it => {
+          const productName = (it.displayName || guessNameFromFilename(it.fileName || '') || '').trim();
+          const key = normalizeKey(productName || it.key || '');
+          if (!key) return;
+          if (pdfStore.has(key)) return;
+
+          const isDrive = (it.source === 'drive');
+          const fileIdOrCacheId = String(it.id || '');
+          const fileName = it.fileName || (productName + '.pdf');
+
+          const item = {
+            displayName: productName,
+            id: fileIdOrCacheId,
+            fileName,
+            source: isDrive ? 'drive' : 'cache',
+            sizeBytes: Number(it.sizeBytes || 0),
+            updatedAt: it.updatedAt || ''
+          };
+
+          if (isDrive) {
+            item.driveKind = it.driveKind || 'pdf';
+            item.previewUrl = buildDrivePreviewUrl_(fileIdOrCacheId);
+            item.openUrl = buildDriveOpenUrl_(fileIdOrCacheId);
+            item.blobUrl = item.previewUrl || '';
+          } else {
+            item.blobUrl = ''; // on-demand
+          }
+
+          pdfStore.set(key, item);
+          if (!lastImportedPdfKey) lastImportedPdfKey = key;
+        });
+      } catch (e) {
+        console.warn('hydratePdfStoreFromImportedList_ failed:', e);
+      }
+    }
+
+
+
+    
+function saveState() {
+      try {
+        // 只保存可序列化的表單資料；PDF bytes/Blob URL/排關圖畫筆（pdfAnnoStore）不寫入 localStorage（改存 IndexedDB）
         const payload = {
           active: state.active || 0,
           records: (state.records || []).map(r => ({
+            rid: r.rid || '',
             type: r.type || '',
-            product: r.product || '',
+            name: r.name || '',
+            productName: r.productName || r.name || '',
             date: r.date || '',
+            notesText: r.notesText || '',
+            notesInk: r.notesInk || '',
             desc: r.desc || '',
             plannedOutputHr: r.plannedOutputHr || '',
             manHourProductivity: r.manHourProductivity || '',
             packagingEquip: r.packagingEquip || '',
             packagingCapacityHr: r.packagingCapacityHr || '',
             _kpiLastKey: r._kpiLastKey || '',
-            contentText: r.contentText || '',
-            inkDataUrl: r.inkDataUrl || '',
             images: r.images || [],
             drivePick: r.drivePick || null,
-            processStepsRows: r.processStepsRows || []
+            processStepsRows: r.processStepsRows || [],
+            // PDF inline prefs
+            pdfZoomFactor: Number(r.pdfZoomFactor || 1),
+            pdfAnnoMode: !!r.pdfAnnoMode,
+            pdfAnnoTool: r.pdfAnnoTool || 'pen',
+            pdfAnnoPenColor: r.pdfAnnoPenColor || '#f97316',
+            pdfAnnoPenWidth: Number(r.pdfAnnoPenWidth || 3),
+            _activePdfKey: r._activePdfKey || ''
           }))
         };
         localStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(payload));
       } catch (e) {
-        // Storage may be blocked (private mode / quota). Ignore silently.
         console.warn('saveState failed:', e);
       }
     }
+
 
     function loadState() {
       try {
@@ -1070,24 +1360,224 @@
       }
     }
 
+    function normalizeState_() {
+      if (!state.records || !state.records.length) {
+        state.records = [ makeEmptyRecord() ];
+        state.active = 0;
+        return;
+      }
+      state.records.forEach(r => {
+        if (!r.rid) r.rid = genRid_();
+        if (typeof r.pdfZoomFactor !== 'number') r.pdfZoomFactor = Number(r.pdfZoomFactor || 1);
+        if (typeof r.pdfAnnoPenWidth !== 'number') r.pdfAnnoPenWidth = Number(r.pdfAnnoPenWidth || 3);
+        if (typeof r.pdfAnnoMode !== 'boolean') r.pdfAnnoMode = !!r.pdfAnnoMode;
+        if (!r.pdfAnnoTool) r.pdfAnnoTool = 'pen';
+        if (!r.pdfAnnoPenColor) r.pdfAnnoPenColor = '#f97316';
+        if (!r.productName && r.name) r.productName = r.name;
+        if (!r.processStepsRows) r.processStepsRows = [];
+        if (!r.images) r.images = [];
+        if (!r.pdfAnnoStore) r.pdfAnnoStore = {};
+        if (!r._annoLoadedForKey) r._annoLoadedForKey = '';
+        if (!r._activePdfKey) r._activePdfKey = '';
+        if (!r.notesInk) r.notesInk = '';
+        if (!r.notesText) r.notesText = '';
+      });
+      state.active = Math.max(0, Math.min(state.active || 0, state.records.length - 1));
+    }
+
+
 
 
     // ---------------- 排關圖（PDF）管理 ----------------
     const pdfStore = new Map(); // key: normalized product name -> { displayName, fileName, blobUrl }
     let lastImportedPdfKey = '';
 
+
+    // ---------------- 自動保存（避免 iOS/行動裝置閒置回收後資料遺失） ----------------
+    let _saveStateTimer = null;
+    function scheduleSaveState_() {
+      try {
+        if (_saveStateTimer) clearTimeout(_saveStateTimer);
+        _saveStateTimer = setTimeout(() => {
+          _saveStateTimer = null;
+          saveState();
+        }, 250);
+      } catch (e) {}
+    }
+
+    // ---------------- 排關圖畫筆（IndexedDB，依「表單 rid + 排關圖 key」保存） ----------------
+    const _annoSaveTimers = new Map();
+    function _annoCacheId_(rid, pdfKey) {
+      return String(rid || '') + '::' + String(pdfKey || '');
+    }
+
+    async function ensureAnnoLoadedForRecord_(rec, pdfKey) {
+      if (!rec || !rec.rid || !pdfKey) return;
+      if (rec._annoLoadedForKey === pdfKey && rec.pdfAnnoStore && typeof rec.pdfAnnoStore === 'object') return;
+      const id = _annoCacheId_(rec.rid, pdfKey);
+      const row = await cacheGetAnno_(id);
+      rec.pdfAnnoStore = (row && row.store) ? row.store : {};
+      rec._annoLoadedForKey = pdfKey;
+    }
+
+    function scheduleAnnoSaveForRecord_(rec, pdfKey) {
+      if (!rec || !rec.rid || !pdfKey) return;
+      const id = _annoCacheId_(rec.rid, pdfKey);
+      if (_annoSaveTimers.has(id)) clearTimeout(_annoSaveTimers.get(id));
+      _annoSaveTimers.set(id, setTimeout(async () => {
+        _annoSaveTimers.delete(id);
+        try {
+          await cachePutAnno_(id, rec.pdfAnnoStore || {});
+        } catch (e) {}
+      }, 600));
+    }
+
+
     // ---------------- KPI（排關圖欄位）快取 ----------------
     // key: normalizeKey(商品名) -> { plannedOutputHr, manHourProductivity, packagingEquip, packagingCapacityHr, source, updatedAt }
     const kpiStore = new Map();
 
 
-    function normalizeKey(s) {
-      const t = (s || '').toString().trim();
-      return t
-        .replace(/\s+/g, '')
-        .replace(/[()（）【】\[\]{}「」『』"“”'’`·•‧,，.。:：;；!！?？\/\\|｜\-—_]/g, '')
-        .toLowerCase();
+    
+async function importPdfFiles_v2(files) {
+      if (!files || !files.length) return;
+
+      // A 模式：本次匯入覆蓋
+      resetImportContext_();
+
+      let importedPdf = 0;
+      let importedExcel = 0;
+      let failedExcel = 0;
+
+      const isPdf = (f) => {
+        const name = (f && f.name) ? String(f.name).toLowerCase() : '';
+        const t = (f && f.type) ? String(f.type).toLowerCase() : '';
+        return t === 'application/pdf' || name.endsWith('.pdf');
+      };
+      const isExcel = (f) => {
+        const name = (f && f.name) ? String(f.name).toLowerCase() : '';
+        const t = (f && f.type) ? String(f.type).toLowerCase() : '';
+        return name.endsWith('.xlsx') || name.endsWith('.xls') ||
+               t === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+               t === 'application/vnd.ms-excel';
+      };
+
+      for (const f of files) {
+        try {
+          const ab = await f.arrayBuffer();
+
+          if (isPdf(f)) {
+            const extracted = await extractProductNameFromPdf(ab);
+            const displayName = (extracted || guessNameFromFilename(f.name) || '').trim() || '（未命名）';
+            const key = normalizeKey(displayName);
+
+            // Use stable cacheId so reload/offline can restore without re-import
+            const cacheId = 'localpdf:' + fnv1a32_((f.name || '') + '|' + String(f.size || 0) + '|' + String(f.lastModified || 0));
+
+            // Cache into IndexedDB for offline + reload recovery
+            try {
+              await cachePutPdf_(cacheId, ab, { name: displayName, sizeBytes: Number(f.size || ab.byteLength || 0), updatedAt: '' });
+            } catch (e) {}
+
+            const blobUrl = URL.createObjectURL(new Blob([ab], { type: 'application/pdf' }));
+            const prev = pdfStore.get(key);
+            if (prev && prev.blobUrl) { try { URL.revokeObjectURL(prev.blobUrl); } catch (e) {} }
+
+            const pdfItem = { displayName, id: cacheId, fileName: f.name, blobUrl, ab, source: 'cache', sizeBytes: Number(f.size || ab.byteLength || 0), updatedAt: '' };
+            pdfStore.set(key, pdfItem);
+
+            upsertCurrentImported_(pdfItem);
+
+            // KPI cache (best effort)
+            try {
+              const kpi = await extractKpiFromPdf(ab);
+              if (kpi) kpiStore.set(key, { ...kpi, source: 'pdf', updatedAt: Date.now() });
+            } catch (e) {
+              console.warn('KPI extract (PDF) failed:', e);
+            }
+
+            lastImportedPdfKey = key;
+            importedPdf += 1;
+            continue;
+          }
+
+          if (isExcel(f)) {
+            // Excel 版本：優先在「有網路時」就先轉成 PDF 並寫入 IndexedDB（避免離線/刷新後無法再轉）
+            const displayName0 = (guessNameFromFilename(f.name) || '').trim();
+            const displayName = displayName0 ? displayName0 : '（Excel→PDF）';
+            const key = normalizeKey(displayName);
+
+            const cacheId = 'localexcelpdf:' + fnv1a32_((f.name || '') + '|' + String(f.size || ab.byteLength || 0) + '|' + String(f.lastModified || 0));
+
+            let pdfAb = null;
+            try {
+              pdfAb = await __excelArrayBufferToPdf_(ab, { title: displayName });
+            } catch (e) {
+              failedExcel += 1;
+              console.warn('Excel -> PDF 轉換失敗：', e);
+            }
+
+            if (pdfAb) {
+              try {
+                await cachePutPdf_(cacheId, pdfAb, { name: displayName, sizeBytes: Number(pdfAb.byteLength || 0), updatedAt: '' });
+              } catch (e) {}
+              const blobUrl = URL.createObjectURL(new Blob([pdfAb], { type: 'application/pdf' }));
+              const prev = pdfStore.get(key);
+              if (prev && prev.blobUrl) { try { URL.revokeObjectURL(prev.blobUrl); } catch (e) {} }
+              const pdfItem = { displayName, id: cacheId, fileName: f.name, blobUrl, ab: pdfAb, source: 'cache', sizeBytes: Number(pdfAb.byteLength || 0), updatedAt: '' };
+              pdfStore.set(key, pdfItem);
+              upsertCurrentImported_(pdfItem);
+              lastImportedPdfKey = key;
+              importedExcel += 1;
+            } else {
+              // Fallback: keep as excel in-memory (reload/offline may not work)
+              pdfStore.set(key, { displayName: displayName + '（Excel→PDF）', fileName: f.name, excelAb: ab, source: 'excel' });
+              lastImportedPdfKey = key;
+              importedExcel += 1;
+            }
+
+            // KPI cache (best effort)
+            try {
+              const kpi = await extractKpiFromExcel(ab);
+              if (kpi) {
+                kpiStore.set(key, { ...kpi, source: 'excel', updatedAt: Date.now() });
+                if (kpi.productName) {
+                  const k2 = normalizeKey(kpi.productName);
+                  if (k2 && k2 !== key) kpiStore.set(k2, { ...kpi, source: 'excel', updatedAt: Date.now() });
+                }
+              }
+            } catch (e) {
+              console.warn('KPI extract (Excel) failed:', e);
+            }
+            continue;
+          }
+
+          // Unknown file type: ignore silently
+        } catch (e) {
+          console.warn('import schedule failed:', f && f.name, e);
+        }
+      }
+
+      alert(`已匯入排關圖：PDF ${importedPdf} 份、Excel ${importedExcel} 份` + (failedExcel ? `（其中 ${failedExcel} 份 Excel 轉檔失敗，刷新/離線可能無法顯示）` : ''));
+      try { refreshAllProcessStrips(); } catch (e) {}
+      try { refreshAllKpiPanels(); } catch (e) {}
+
+      scheduleSaveState_();
     }
+
+
+    function fnv1a32_(str) {
+      str = String(str || '');
+      let h = 0x811c9dc5;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        // h *= 16777619 (FNV prime) with overflow
+        h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+      }
+      return ('00000000' + h.toString(16)).slice(-8);
+    }
+
+
 
 
     // ---------------- 內容記錄：手寫畫布（支援觸控筆） ----------------
@@ -1404,6 +1894,15 @@ const ctx = prepareCanvasContext(canvas);
       // 例： "1.義式番茄起司義大利麵" -> "義式番茄起司義大利麵"
       return base.replace(/^\s*\d+\s*[\.\-、_ ]\s*/,'').trim() || base.trim();
     }
+
+    function normalizeKey(s) {
+      const t = (s || '').toString().trim();
+      return t
+        .replace(/\s+/g, '')
+        .replace(/[()（）【】\[\]{}「」『』"“”'’`·•‧,，.。:：;；!！?？\/\\|｜\-—_]/g, '')
+        .toLowerCase();
+    }
+
 
     
 
@@ -1843,98 +2342,7 @@ function pdfListText() {
     }
 
     async function importPdfFiles(files) {
-      if (!files || !files.length) return;
-
-      let importedPdf = 0;
-      let importedExcel = 0;
-
-      const isPdf = (f) => {
-        const name = (f && f.name) ? String(f.name).toLowerCase() : '';
-        const t = (f && f.type) ? String(f.type).toLowerCase() : '';
-        return t === 'application/pdf' || name.endsWith('.pdf');
-      };
-      const isExcel = (f) => {
-        const name = (f && f.name) ? String(f.name).toLowerCase() : '';
-        const t = (f && f.type) ? String(f.type).toLowerCase() : '';
-        return name.endsWith('.xlsx') || name.endsWith('.xls') ||
-               t === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-               t === 'application/vnd.ms-excel';
-      };
-
-      for (const f of files) {
-        try {
-          const ab = await f.arrayBuffer();
-
-          if (isPdf(f)) {
-            const extracted = await extractProductNameFromPdf(ab);
-            const displayName = extracted || guessNameFromFilename(f.name);
-            const key = normalizeKey(displayName);
-            const blobUrl = URL.createObjectURL(new Blob([ab], { type: 'application/pdf' }));
-
-            const prev = pdfStore.get(key);
-            if (prev && prev.blobUrl) {
-              try { URL.revokeObjectURL(prev.blobUrl); } catch (e) {}
-            }
-
-            pdfStore.set(key, { displayName, fileName: f.name, blobUrl, ab, source: 'local' });
-
-            // KPI cache (best effort)
-            try {
-              const kpi = await extractKpiFromPdf(ab);
-              if (kpi) {
-                kpiStore.set(key, { ...kpi, source: 'pdf', updatedAt: Date.now() });
-              }
-            } catch (e) {
-              console.warn('KPI extract (PDF) failed:', e);
-            }
-
-            lastImportedPdfKey = key;
-            importedPdf += 1;
-            continue;
-          }
-
-          if (isExcel(f)) {
-            // Excel 版本的排關圖：離線顯示時再轉成 PDF（保留其他功能流程）
-            const displayName0 = guessNameFromFilename(f.name);
-            const displayName = displayName0 ? (displayName0 + '（Excel→PDF）') : '（Excel→PDF）';
-            const key = normalizeKey(displayName0 || displayName);
-
-            const prev = pdfStore.get(key);
-            if (prev && prev.blobUrl) {
-              try { URL.revokeObjectURL(prev.blobUrl); } catch (e) {}
-            }
-
-            pdfStore.set(key, { displayName, fileName: f.name, excelAb: ab, source: 'excel' });
-
-            // KPI cache (best effort)
-            try {
-              const kpi = await extractKpiFromExcel(ab);
-              if (kpi) {
-                // Store under file-derived key, and also under extracted productName key if present
-                kpiStore.set(key, { ...kpi, source: 'excel', updatedAt: Date.now() });
-                if (kpi.productName) {
-                  const k2 = normalizeKey(kpi.productName);
-                  if (k2 && k2 !== key) kpiStore.set(k2, { ...kpi, source: 'excel', updatedAt: Date.now() });
-                }
-              }
-            } catch (e) {
-              console.warn('KPI extract (Excel) failed:', e);
-            }
-
-            lastImportedPdfKey = key;
-            importedExcel += 1;
-            continue;
-          }
-
-          // Unknown file type: ignore silently
-        } catch (e) {
-          console.warn('import schedule failed:', f && f.name, e);
-        }
-      }
-
-      alert(`已匯入排關圖：PDF ${importedPdf} 份、Excel ${importedExcel} 份`);
-      try { refreshAllProcessStrips(); } catch (e) {}
-      try { refreshAllKpiPanels(); } catch (e) {}
+      return await importPdfFiles_v2(files);
     }
 
     function refreshAllProcessStrips() {
@@ -2796,7 +3204,21 @@ async function getPdfArrayBuffer(pdfItem) {
     }
   }
 
-  // Drive 匯入：先用離線快取；未命中則走「小檔整包 download / 大檔分段 downloadChunk」自動策略
+  
+
+  // Cache/Local 匯入（IndexedDB）：若刷新後記憶體釋放，仍可由快取取回
+  if ((pdfItem.source === 'cache' || pdfItem.source === 'local') && pdfItem.id) {
+    try {
+      const cached = await cacheGetPdf_(String(pdfItem.id));
+      if (cached && cached.ab) {
+        pdfItem.ab = cached.ab;
+        pdfItem.lastDownloadError = '';
+        return pdfItem.ab;
+      }
+    } catch (e) {}
+  }
+
+// Drive 匯入：先用離線快取；未命中則走「小檔整包 download / 大檔分段 downloadChunk」自動策略
   if (pdfItem.source === 'drive' && pdfItem.id) {
     const fileId = String(pdfItem.id);
     const sizeBytes = Number(pdfItem.sizeBytes || 0);
@@ -3929,6 +4351,9 @@ async function __importDriveItemsCore_(items, opts) {
 
   var total = arr.length;
 
+  // A 模式：本次匯入覆蓋
+  resetImportContext_();
+
   // UI
   var driveHint = document.getElementById('driveHint');
   var hintBak = driveHint ? driveHint.textContent : '';
@@ -3975,7 +4400,7 @@ async function __importDriveItemsCore_(items, opts) {
 
     pdfStore.set(key, pdfItem);
     lastImportedPdfKey = key;
-    try { upsertDriveImported_(pdfItem); } catch (e) {}
+    try { upsertCurrentImported_(pdfItem); } catch (e) {}
 
     // 顯示進度
     setDriveProgress_(true, c, total, (pdfItem.fileName || pdfItem.displayName || ''));
@@ -4208,11 +4633,21 @@ async function importSelectedFoldersFromDrive() {
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
 
-    function makeEmptyRecord() {
+    
+    function genRid_() {
+      return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+
+function makeEmptyRecord() {
       return {
+        rid: genRid_(),
         type: '',
         name: '',
+        productName: '',
+        date: '',
         notesText: '',
+        notesInk: '',
         desc: '',
         images: [],
 
@@ -4223,9 +4658,22 @@ async function importSelectedFoldersFromDrive() {
         packagingCapacityHr: '',    // 包裝機台產能(hr)
 
         // internal
-        _kpiLastKey: ''
+        _kpiLastKey: '',
+        drivePick: null,
+        processStepsRows: [],
+
+        // PDF inline prefs
+        pdfZoomFactor: 1,
+        pdfAnnoMode: false,
+        pdfAnnoTool: 'pen',
+        pdfAnnoPenColor: '#f97316',
+        pdfAnnoPenWidth: 3,
+        pdfAnnoStore: {},       // in-memory (loaded/saved via IndexedDB)
+        _annoLoadedForKey: '',  // internal
+        _activePdfKey: ''
       };
     }
+
 
     function displayName(rec, idx) {
       const name = rec && typeof rec.name === 'string' ? rec.name : '';
@@ -4387,6 +4835,12 @@ async function importSelectedFoldersFromDrive() {
       flushNotesInkForIndex(state.active);
 
       const copy = deepClone(state.records[idx]);
+      // New record should not share annotation identity
+      copy.rid = genRid_();
+      copy.pdfAnnoStore = {};
+      copy._annoLoadedForKey = '';
+      copy._activePdfKey = '';
+
       state.records.splice(idx + 1, 0, copy);
 
       const newIdx = idx + 1;
@@ -4437,7 +4891,10 @@ async function importSelectedFoldersFromDrive() {
         panel.dataset.idx = String(idx);
 
         // Record patch helper (define early so below handlers can use it safely)
-        const setRecord = (patch) => Object.assign(state.records[idx], patch);
+        const setRecord = (patch) => {
+          Object.assign(state.records[idx], patch);
+          scheduleSaveState_();
+        };
 
         const typeInput   = $('.typeInput', panel);
         const nameInput   = $('.nameInput', panel);
@@ -5242,13 +5699,19 @@ async function refreshInlinePdfPreview() {
     const ab = await getPdfArrayBuffer(pdfItem);
     if (!ab) throw new Error('No PDF buffer');
 
+    const rec = state.records[idx];
+    const pdfKey = normalizeKey((pdfItem.displayName || productName || '').trim());
+    rec._activePdfKey = pdfKey || '';
+    if (pdfKey) await ensureAnnoLoadedForRecord_(rec, pdfKey);
+
     await renderPdfInto(pdfInlineRender, ab, {
-      zoomFactor: state.records[idx].pdfZoomFactor,
-      annotate: state.records[idx].pdfAnnoMode,
-      annoStore: state.records[idx].pdfAnnoStore,
-      eraser: (state.records[idx].pdfAnnoTool === 'eraser'),
-      penColor: state.records[idx].pdfAnnoPenColor,
-      penWidth: state.records[idx].pdfAnnoPenWidth
+      zoomFactor: rec.pdfZoomFactor,
+      annotate: rec.pdfAnnoMode,
+      annoStore: rec.pdfAnnoStore,
+      onAnnoChange: () => { if (pdfKey) scheduleAnnoSaveForRecord_(rec, pdfKey); },
+      eraser: (rec.pdfAnnoTool === 'eraser'),
+      penColor: rec.pdfAnnoPenColor,
+      penWidth: rec.pdfAnnoPenWidth
     });
 
     updatePdfInlineControls_();
@@ -6811,6 +7274,40 @@ try {
     const importBtnHeader = document.getElementById('importPdfBtnHeader');
     if (importBtnHeader) importBtnHeader.addEventListener('click', hookImport);
 
+
+    const clearBtnHeader = document.getElementById('clearFormBtnHeader');
+    if (clearBtnHeader) clearBtnHeader.addEventListener('click', async () => {
+      const ok = confirm('確認清空表單？\n\n此操作會：\n- 清除所有表單內容（文字/照片/手寫）\n- 清除已匯入的排關圖清單（本機/雲端）\n- 移除排關圖畫筆/標註紀錄（本機 IndexedDB）\n\n此動作無法復原。');
+      if (!ok) return;
+
+      try { flushAllNotesInk(); } catch (e) {}
+
+      // 清表單
+      state.records = [ makeEmptyRecord() ];
+      state.active = 0;
+
+      // 清匯入來源（A模式）
+      try { pdfStore.forEach(v => { if (v && v.blobUrl && String(v.blobUrl).startsWith('blob:')) { try { URL.revokeObjectURL(v.blobUrl); } catch (e) {} } }); } catch (e) {}
+      try { pdfStore.clear(); } catch (e) {}
+      lastImportedPdfKey = '';
+      try { kpiStore.clear(); } catch (e) {}
+      try { clearCurrentImportedList_(); } catch (e) {}
+      try { localStorage.removeItem(DRIVE_IMPORTED_KEY); } catch (e) {}
+
+      // 清離線快取（PDF bytes + 排關圖標註）
+      try { await cacheClearAllPdfs_(); } catch (e) {}
+      try { await cacheClearAllAnnos_(); } catch (e) {}
+
+      try { clearInlinePdf(); } catch (e) {}
+      try { closePdfModal(); } catch (e) {}
+      try { closeDriveModal(); } catch (e) {}
+
+      saveState();
+      renderAll();
+      setActive(0, { scrollTabIntoView: true });
+      alert('已清空完成。');
+    });
+
     if (pdfInputEl) {
       pdfInputEl.addEventListener('change', async (e) => {
         const files = Array.from((e.target && e.target.files) ? e.target.files : []);
@@ -6862,15 +7359,61 @@ try {
 
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeCatalog(); closePdfModal(); closeDriveModal(); } });
 
+    // 在 iOS/行動裝置：背景/閒置時可能直接回收頁面；盡量在 pagehide/visibilitychange 前先把資料寫入 storage/IndexedDB
+    async function flushAllPdfAnnos_() {
+      try {
+        for (let i = 0; i < (state.records || []).length; i++) {
+          const rec = state.records[i];
+          if (!rec || !rec.rid) continue;
+          const pdfKey = rec._activePdfKey || normalizeKey((rec.name || rec.productName || '').trim());
+          if (!pdfKey) continue;
+          // 若這個 key 的 anno 已載入或有內容，就寫入
+          if (rec.pdfAnnoStore && typeof rec.pdfAnnoStore === 'object' && Object.keys(rec.pdfAnnoStore).length) {
+            await cachePutAnno_(_annoCacheId_(rec.rid, pdfKey), rec.pdfAnnoStore);
+          }
+        }
+      } catch (e) {}
+    }
+
+    window.addEventListener('pagehide', () => {
+      try { flushAllNotesInk(); } catch (e) {}
+      try { saveState(); } catch (e) {}
+      try { flushAllPdfAnnos_(); } catch (e) {}
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        try { flushAllNotesInk(); } catch (e) {}
+        try { saveState(); } catch (e) {}
+        try { flushAllPdfAnnos_(); } catch (e) {}
+      }
+    });
+
+
+
     window.addEventListener('resize', schedulePositionCatalogBtn);
     window.addEventListener('scroll', schedulePositionCatalogBtn, { passive: true });
-    // Start（每次開啟都回到「初始狀態：只有未命名1」）
-    try { localStorage.removeItem(STATE_STORAGE_KEY); } catch (e) {}
-    state.records = [ makeEmptyRecord() ];
-    state.active = 0;
+    // Start（行動裝置可能會在閒置後自動回收頁面；因此改成：能讀到就復原，讀不到才初始化）
+    const ok = loadState();
+    if (!ok) {
+      state.records = [ makeEmptyRecord() ];
+      state.active = 0;
+    }
+    normalizeState_();
     saveState();
     // 復原先前已匯入的雲端 PDF（metadata）；若 PDF 已被快取，可在離線狀態使用
-    hydratePdfStoreFromImportedDrive_();
+    hydratePdfStoreFromImportedList_();
+
+    // Fallback: localStorage 可能在 iOS 閒置回收後被清空；若匯入清單遺失，嘗試由 IndexedDB 快取重建。
+    try {
+      hydratePdfStoreFromCacheIndex_().then(function(added){
+        if (added) {
+          try { refreshAllProcessStrips(); } catch (e) {}
+          try { refreshAllKpiPanels(); } catch (e) {}
+        }
+      }).catch(function(){});
+    } catch (e) {}
+
     // Preload PDF.js early (avoids "PDF.js 尚未載入" on first extraction in some networks)
     try {
       ensurePdfJsLoaded().then(function(ok){ window.__pdfjsReady = !!ok; }).catch(function(){ window.__pdfjsReady = false; });
@@ -7169,6 +7712,7 @@ const targetW = Math.max(320, Math.floor(hostW - 16));
         eraser: !!opts.eraser,
         onChange: (dataUrl) => {
           if (annoStore) annoStore[pageNum] = dataUrl;
+          if (opts && typeof opts.onAnnoChange === 'function') { try { opts.onAnnoChange(pageNum, dataUrl, annoStore); } catch (e) {} }
         }
       });
       if (inkApi) {
