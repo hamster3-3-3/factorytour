@@ -5814,9 +5814,11 @@ function attachPinchZoomToInlinePdf_() {
     });
   };
 
-  // Ensure scrolling feels native on iPad
+  // Ensure scrolling feels native on iPad / mobile.
+  // Important: do NOT block single-finger panning here, otherwise users cannot scroll the PDF
+  // when annotation mode is off. We only prevent default during active two-finger gestures below.
   try { pdfInlineRender.style.webkitOverflowScrolling = 'touch'; } catch (_) {}
-  try { pdfInlineRender.style.touchAction = 'none'; } catch (_) {}
+  try { pdfInlineRender.style.touchAction = 'auto'; } catch (_) {}
 
   pdfInlineRender.addEventListener('touchstart', (e) => {
     if (!e.touches || e.touches.length !== 2) return;
@@ -7559,6 +7561,7 @@ function enableInkOnCanvas_(canvas, opts = {}) {
 
   // Drawing canvas: let us manage gestures. Pinch zoom is implemented on the PDF container (touch events).
   canvas.style.touchAction = "none";
+  try { canvas.style.pointerEvents = state.disabled ? 'none' : 'auto'; } catch (_) {}
   canvas.addEventListener("pointerdown", onDown, { passive: false });
   canvas.addEventListener("pointermove", onMove, { passive: false });
   canvas.addEventListener("pointerup", onUp, { passive: false });
@@ -7573,7 +7576,11 @@ function enableInkOnCanvas_(canvas, opts = {}) {
     setPenColor(c) {
       if (typeof c === "string" && /^#([0-9a-fA-F]{6})$/.test(c)) state.penColor = c;
     },
-    setDisabled(v) { state.disabled = !!v; },
+    setDisabled(v) {
+      state.disabled = !!v;
+      try { canvas.style.pointerEvents = state.disabled ? 'none' : 'auto'; } catch (_) {}
+      try { canvas.style.touchAction = state.disabled ? 'auto' : 'none'; } catch (_) {}
+    },
     clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); scheduleChange_(true); },
     destroy() {
       canvas.removeEventListener("pointerdown", onDown);
